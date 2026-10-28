@@ -1,0 +1,6 @@
+services:
+  my-librarium:
+    build: .
+    ports:
+      - "3001:80"
+    restart: unless-stopped
