@@ -17,6 +17,10 @@ This is the latest standalone prototype, not a fork of the Librarium backend. It
 - Per-bookcase top enclosure selector: no top, no top/sides, fully enclosed.
 - Varied decorative book spines (reshuffle on refresh; they do not represent actual inventory).
 - Series with ordered entered volumes, owned/missing indicators, reading progress, arcs and manual linking.
+- Local-agent workspace with focused catalogue checks, a persistent verification queue, and explicit confirm/reject controls.
+- One-button physical shelf optimiser that minimises movement, respects capacity and protected spaces, keeps series together, and generates a shelf-by-shelf checklist.
+- Separate **Initial plan** and **Full rearrange** modes. Full rearrange creates contiguous category zones, plans reliable book moves first, then walks through shelf-category label changes.
+- Resumable move plans: tick each physical move when complete to update its recorded location and unlock the next instruction.
 - Compact phone/tablet navigation and responsive dialogs.
 
 Layout: left A–E, right F–I, with A and F nearest the headboard. Default capacity is approximately 17 books per shelf. Sample series volume lists are partial examples, not authoritative catalogues.
@@ -49,10 +53,11 @@ The UI currently requests fonts from Google Fonts and falls back to local fonts 
 
 ## Next integration work
 
-Connect authentication and book/series actions to the existing Librarium API; verify compatibility with the installed version; implement reliable create verification, automatic series suggestions, metadata/cover lookup and persistent shared shelf settings.
+Connect authentication and book/series actions to the existing Librarium API; verify compatibility with the installed version; implement reliable create verification, automatic series suggestions, metadata/cover lookup and persistent shared shelf settings. The current local agent is a deterministic, review-first planner operating on browser data; connecting a local model can later extend its reasoning without changing the confirmation workflow.
 
 Upstream projects:
 - https://github.com/FireBall1725/librarium-web
 - https://github.com/FireBall1725/librarium-api
 
 Upstream Librarium is AGPL-3.0-only. Its backend and client source are not bundled here; preserve applicable licences if upstream code is incorporated.
+
