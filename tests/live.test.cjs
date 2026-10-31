@@ -91,3 +91,49 @@ test('empty membership is explicit; failure loading books remains visible', asyn
     assert.match(env.element('content').innerHTML, empty ? /no accessible libraries/ : /role="alert".*Backend unavailable/);
   }
 });
+
+test('a shelf move validates its destination, keeps unrelated shelves, and preserves contributors', async () => {
+  const original = { ...book('existing'), media_type_id: 'media-book', contributors: [
+    { contributor_id: 'author-id', name: 'Real author', role: 'author', display_order: 0 },
+    { contributor_id: 'artist-id', name: 'Artist', role: 'illustrator', display_order: 1 }
+  ], shelves: [{ id: 'old', name: 'A2' }, { id: 'favourites', name: 'Favourites' }] };
+  const env = setup((url, options) => {
+    if (url.endsWith('/auth/login')) return json({ access_token: 'test' });
+    if (url.endsWith('/libraries')) return json([libraries[0]]);
+    if (url.endsWith('/shelves')) return json([{ id: 'old', name: 'A2' }, { id: 'new', name: 'B2' }, { id: 'favourites', name: 'Favourites' }]);
+    if (options.method === 'PUT') return json(original);
+    if (options.method === 'DELETE' || options.method === 'POST') return { status: 204 };
+    return json({ items: [original], total: 1 });
+  });
+  await signIn(env);
+  env.element('bookForm').fields = { title: original.title, author: 'Real author', shelf: 'B2' };
+  await env.context.saveBook('existing');
+  const writes = env.requests.filter(r => r.options.method && r.options.method !== 'GET' && !r.url.endsWith('/auth/login'));
+  assert.deepEqual(JSON.parse(writes[0].options.body).contributors, original.contributors);
+  assert.match(writes[1].url, /\/shelves\/new\/books$/);
+  assert.match(writes[2].url, /\/shelves\/old\/books\/existing$/);
+  assert.ok(!writes.some(r => r.url.includes('/favourites/')));
+  env.element('bookForm').fields.shelf = 'I8';
+  const start = env.requests.length;
+  await env.context.saveBook('existing');
+  assert.ok(!env.requests.slice(start).some(r => /\/shelves\//.test(r.url)));
+});
+
+test('new book creation sends the required media type and uses the unwrapped created ID', async () => {
+  const env = setup((url, options) => {
+    if (url.endsWith('/auth/login')) return json({ access_token: 'test' });
+    if (url.endsWith('/libraries')) return json([libraries[0]]);
+    if (url.endsWith('/shelves')) return json([{ id: 'target', name: 'A2' }]);
+    if (url.endsWith('/media-types')) return json([{ id: 'media-book', name: 'book' }]);
+    if (url.endsWith('/lib1/books') && options.method === 'POST') return json(book('created-id'));
+    if (options.method === 'POST') return { status: 204 };
+    return json({ items: [], total: 0 });
+  });
+  await signIn(env);
+  env.element('bookForm').fields = { title: 'New book', author: 'Author', libraryId: 'lib1', shelf: 'A2' };
+  await env.context.saveBook(null);
+  const creation = env.requests.find(r => r.url.endsWith('/lib1/books') && r.options.method === 'POST');
+  assert.equal(JSON.parse(creation.options.body).media_type_id, 'media-book');
+  const shelving = env.requests.find(r => r.url.endsWith('/shelves/target/books'));
+  assert.equal(JSON.parse(shelving.options.body).book_id, 'created-id');
+});
