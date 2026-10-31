@@ -2,5 +2,9 @@ services:
   my-librarium:
     build: .
     ports:
-      - "3001:80"
+      - "3002:80"
+    environment:
+      LIBRARIUM_UPSTREAM: ${LIBRARIUM_UPSTREAM:-http://host.docker.internal:3000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
