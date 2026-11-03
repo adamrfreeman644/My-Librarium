@@ -4,13 +4,14 @@ A responsive household book-library frontend prototype with a visual map of phys
 
 ## Current status
 
-This is the latest standalone prototype, not a fork of the Librarium backend. It uses sample books and browser localStorage. It does **not** connect to the live Librarium API, database, ISBN lookup, cover providers, series catalogue sync, or automatic series identification yet. Changes are local to each browser/device; clearing browser storage resets them. Do not use it as the only record of your real collection.
+This is the latest standalone prototype, not a fork of the Librarium backend. It uses sample books and browser localStorage. The Add Book dialog follows Librarium's ISBN/title/manual flow: it tries the same-origin Librarium ISBN endpoint when available and otherwise uses Open Library to fill title, author and cover data. Saving still remains local to each browser/device; clearing browser storage resets it. Do not use it as the only record of your real collection.
 
 ## Features
 
 - Separate Safi, Adam and Caleb collections.
 - Book grid, search and recently added.
 - Add/edit/delete books, duplicate warnings, deletion undo, local cover upload.
+- Add Book dialog with ISBN lookup, title/author search and manual-entry modes.
 - Move books between collections and physical shelf locations.
 - Horizontally swipeable A–I bookcases, with a shared bottom baseline.
 - Physical paint colours, category colours, shelf labels and approximate capacities.
