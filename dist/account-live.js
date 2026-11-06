@@ -54,6 +54,7 @@
   }
 
   function loginScreen(message = '') {
+    clearCovers();
     updateAccountAction();
     if (modal.open) modal.close();
     books = [];
@@ -126,10 +127,63 @@
     toast(`Loaded ${books.length} books from Librarium`);
   }
 
+  let coverObserver;
+  let coverRequests;
+  const coverURLs = new Set();
+
+  function clearCovers() {
+    coverObserver?.disconnect();
+    coverRequests?.abort();
+    for (const url of coverURLs) URL.revokeObjectURL(url);
+    coverURLs.clear();
+  }
+
+  function loadCovers() {
+    const token = state.token;
+    if (!token) return;
+    coverRequests = new AbortController();
+    const signal = coverRequests.signal;
+    async function loadCover(img) {
+      try {
+        const path = img.dataset.libraryCover;
+        const url = new URL(path, location.origin);
+        if (url.origin !== location.origin || !url.pathname.startsWith('/api/')) return;
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          redirect: 'error',
+          signal,
+        });
+        if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) return;
+        const blob = await response.blob();
+        if (signal.aborted || !img.isConnected) return;
+        const src = URL.createObjectURL(blob);
+        coverURLs.add(src);
+        img.src = src;
+      } catch {
+        // Leave the book's title and author visible when its cover is unavailable.
+      }
+    }
+    const images = document.querySelectorAll('img[data-library-cover]');
+    if (typeof IntersectionObserver === 'undefined') {
+      images.forEach(loadCover);
+      return;
+    }
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) if (entry.isIntersecting) {
+        observer.unobserve(entry.target);
+        loadCover(entry.target);
+      }
+    }, { rootMargin: '250px' });
+    coverObserver = observer;
+    images.forEach(img => observer.observe(img));
+  }
+
   const baseRender = window.render;
   window.render = function () {
     if (!state.loaded) { loginScreen(); return; }
+    clearCovers();
     baseRender();
+    loadCovers();
     // The prototype interpolated numeric IDs into inline handlers. Live IDs
     // are UUID strings. Repair generated links, including local-agent cards.
     document.querySelectorAll('[onclick], [onkeydown]').forEach(element => {
