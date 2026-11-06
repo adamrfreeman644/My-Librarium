@@ -351,10 +351,104 @@
       <label>Title</label><input name="title" required value="${esc(b?.title || '')}">
       <label>Author</label><input name="author" required value="${esc(b?.author || '')}">
       <label>Library</label><select name="libraryId" ${b ? 'disabled' : ''}>${libs}</select>
+      ${b && state.libraries.length > 1 ? '<button id="moveBookButton" type="button" style="margin-top:8px">Move to another library</button>' : ''}
       <label>Physical shelf</label><select name="shelf">${shelfOptions(b?.shelf || shelf)}</select>
       <p style="font-size:11px;margin-top:8px">Shelf moves are written back to matching Librarium shelves such as A1–I8.</p>
       <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
+    document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
   };
+
+  async function moveLibraryCopy(book, destination) {
+    if (destination.id === book.libraryId) throw new Error('Choose a different library.');
+    const path = `/books/${encodeURIComponent(book.id)}/copies`;
+    const readCopies = async () => requireList((await api(path))?.items);
+    const copies = await readCopies();
+    const originals = copies.filter(copy => copy.library_id === book.libraryId);
+    if (originals.length !== 1) throw new Error('This move requires exactly one copy in the source library.');
+    const source = originals[0];
+    if (!source.id) throw new Error('Librarium did not return a valid source copy.');
+    if (source.on_loan_to) throw new Error('Return the loan before moving this copy.');
+    if (copies.some(copy => copy.library_id === destination.id)) {
+      throw new Error('The destination already has this book. Check both libraries before trying another move.');
+    }
+
+    const payload = { book_id: book.id };
+    for (const key of ['edition_id', 'acquired_at', 'acquired_from', 'price_minor',
+      'price_currency', 'condition', 'is_signed', 'notes']) {
+      if (source[key] != null) payload[key] = source[key];
+    }
+
+    // Keep the original unless we can verify the new copy and recheck the source.
+    const created = await api(`/libraries/${encodeURIComponent(destination.id)}/copies`, {
+      method: 'POST', body: JSON.stringify(payload),
+    });
+    try {
+      const updated = await readCopies();
+      if (!created?.id || !updated.some(copy =>
+        copy.id === created.id && copy.id !== source.id && copy.library_id === destination.id &&
+        (copy.edition_id || '') === (source.edition_id || '')
+      )) throw new Error('Destination copy could not be verified.');
+      const stillThere = updated.find(copy => copy.id === source.id && copy.library_id === book.libraryId);
+      if (!stillThere || stillThere.on_loan_to || stillThere.updated_at !== source.updated_at) {
+        throw new Error('The original changed during the move.');
+      }
+    } catch (error) {
+      throw new Error(`${error.message} The original was kept. Check the destination for a new copy.`);
+    }
+    try {
+      await api(`/copies/${encodeURIComponent(source.id)}`, { method: 'DELETE' });
+    } catch {
+      throw new Error('The destination copy was verified, but removal could not be confirmed. Check both libraries before retrying.');
+    }
+  }
+
+  function showMoveBook(book) {
+    const destinations = state.libraries.filter(lib => lib.id !== book.libraryId);
+    if (!destinations.length) return;
+    show(`<h2>Move to another library</h2><p>Move “${esc(book.title)}” from ${esc(book.owner)}.</p>
+      <form id="moveBookForm">
+        <label for="moveDestination">Destination library</label>
+        <select id="moveDestination" name="destination" required>
+          <option value="">Choose a library</option>
+          ${destinations.map(lib => `<option value="${esc(lib.id)}">${esc(lib.name)}</option>`).join('')}
+        </select>
+        <p>The new copy starts unshelved. Its book details and edition are kept; links specific to the old library, such as shelf and series placement, don’t move.</p>
+        <p id="moveBookStatus" role="status"></p>
+        <div class="actions"><button type="button" id="cancelMoveBook">Cancel</button>
+          <button class="primary" type="submit">Move book</button></div>
+      </form>`);
+    const form = document.getElementById('moveBookForm');
+    const status = document.getElementById('moveBookStatus');
+    document.getElementById('cancelMoveBook').addEventListener('click', () => openBook(book.id));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (moveInProgress) return;
+      const destination = destinations.find(lib => lib.id === form.elements.destination.value);
+      if (!destination) return;
+      moveInProgress = true;
+      const close = modal.querySelector('.dialogClose');
+      const controls = [...form.querySelectorAll('button,select'), close];
+      controls.forEach(control => control.disabled = true);
+      status.textContent = 'Moving book…';
+      try {
+        await moveLibraryCopy(book, destination);
+        modal.close();
+        owner = destination.name;
+        try { await loadLive(); }
+        catch { toast('Book moved. Refresh to see the updated library.'); return; }
+        toast(`Book moved to ${destination.name}`);
+      } catch (error) {
+        status.textContent = error.message;
+        if (!status.isConnected) toast(error.message);
+      } finally {
+        moveInProgress = false;
+        controls.forEach(control => control.disabled = false);
+      }
+    });
+  }
+
+  let moveInProgress = false;
+  modal.addEventListener('cancel', event => { if (moveInProgress) event.preventDefault(); });
 
   async function setShelf(book, code) {
     const available = state.shelves.get(book.libraryId) || [];
