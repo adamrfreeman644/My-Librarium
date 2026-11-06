@@ -55,6 +55,9 @@
 
   function loginScreen(message = '') {
     clearCovers();
+    seriesRequest = null;
+    liveSeries = [];
+    seriesLoading = false;
     updateAccountAction();
     if (modal.open) modal.close();
     books = [];
@@ -176,6 +179,84 @@
     }, { rootMargin: '250px' });
     coverObserver = observer;
     images.forEach(img => observer.observe(img));
+  }
+
+  let seriesRequest;
+  let seriesLoading = false;
+  let liveSeries = [];
+  let failedSeries = 0;
+  const seriesPath = lib => `/libraries/${encodeURIComponent(lib.id)}/series`;
+  const officialSeries = 'https://librarium.ad53app.com/series';
+  const requireList = result => {
+    if (!Array.isArray(result)) throw new Error('Unexpected Librarium response');
+    return result;
+  };
+
+  function fetchSeries() {
+    seriesLoading = true;
+    const token = state.token;
+    seriesRequest = Promise.allSettled(state.libraries.map(async lib =>
+      requireList(await api(seriesPath(lib))).map(entry => ({ entry, lib }))
+    )).then(results => {
+      if (!token || state.token !== token) return;
+      seriesLoading = false;
+      failedSeries = results.filter(r => r.status === 'rejected').length;
+      liveSeries = results.flatMap(r => r.status === 'fulfilled' ? r.value : [])
+        .sort((a, b) => String(a.entry.name).localeCompare(String(b.entry.name)));
+      if (view === 'series' && state.loaded) render();
+    });
+  }
+
+  window.renderSeries = function () {
+    document.getElementById('pageTitle').textContent = 'Book series';
+    document.getElementById('subtitle').textContent = 'Series saved in your Librarium collections.';
+    const panel = document.getElementById('content');
+    if (!seriesRequest) {
+      panel.innerHTML = '<div class="emptymsg" role="status">Loading series from Librarium…</div>';
+      fetchSeries();
+      return;
+    }
+    if (seriesLoading) {
+      panel.innerHTML = '<div class="emptymsg" role="status">Loading series from Librarium…</div>';
+      return;
+    }
+    const query = document.getElementById('search').value.trim().toLowerCase();
+    const visible = liveSeries.filter(({entry, lib}) =>
+      (owner === 'Everyone' || owner === lib.name) &&
+      [entry.name, entry.description, lib.name].join(' ').toLowerCase().includes(query)
+    );
+    panel.innerHTML = `<div class="paneltop"><h2>Saved series</h2><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a></div>
+      ${failedSeries ? '<p role="status">Some collections’ series could not be loaded. <button id="retrySeries" type="button">Try again</button></p>' : ''}
+      <div class="seriesgrid">${visible.map(({entry, lib}, index) => `<button class="seriescard" data-series-index="${index}">
+        <div class="eyebrow">${esc(lib.name)}</div><h2>${esc(entry.name || 'Untitled series')}</h2>
+        ${entry.book_count == null ? '' : `<p>${esc(String(entry.book_count))} linked books</p>`}
+      </button>`).join('')}</div>
+      ${!visible.length && !failedSeries ? '<div class="emptymsg">No saved series match this view.</div>' : ''}`;
+    panel.querySelector('#retrySeries')?.addEventListener('click', () => { seriesRequest = null; render(); });
+    panel.querySelectorAll('[data-series-index]').forEach(button => button.addEventListener('click', () =>
+      showLiveSeries(visible[Number(button.dataset.seriesIndex)])));
+  };
+
+  async function showLiveSeries({entry, lib}) {
+    show(`<div class="eyebrow">${esc(lib.name)}</div><h2>${esc(entry.name || 'Untitled series')}</h2>
+      ${entry.description ? `<p>${esc(entry.description)}</p>` : ''}
+      <div id="liveSeriesBooks" class="shelfBooks" role="status">Loading linked books…</div>
+      <div class="actions"><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a></div>`);
+    const panel = document.getElementById('liveSeriesBooks');
+    try {
+      const entries = requireList(await api(`${seriesPath(lib)}/${encodeURIComponent(entry.id)}/books`));
+      if (!panel.isConnected || !modal.open) return;
+      entries.sort((a, b) => Number(a.position || 0) - Number(b.position || 0));
+      panel.innerHTML = entries.map((book, index) => `<div class="volume">
+        <span class="volnumber">${esc(String(book.position || index + 1))}</span>
+        <div class="voltext"><b>${esc(book.title || 'Untitled book')}</b>
+        ${books.some(b => b.id === book.book_id) ? `<button type="button" data-series-book="${index}">View book</button>` : ''}
+        </div></div>`).join('') || '<p>No books are linked to this series yet.</p>';
+      panel.querySelectorAll('[data-series-book]').forEach(button => button.addEventListener('click', () =>
+        openBook(entries[Number(button.dataset.seriesBook)].book_id)));
+    } catch {
+      panel.textContent = 'Linked books could not be loaded. Try opening this series again.';
+    }
   }
 
   const baseRender = window.render;
