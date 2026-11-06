@@ -361,7 +361,7 @@
   const bookCopies = async book =>
     requireList((await api(`/books/${encodeURIComponent(book.id)}/copies`))?.items);
 
-  async function moveLibraryCopy(book, destination, sourceId, displayedCopies) {
+  async function moveLibraryCopy(book, destination, sourceId, displayedCopies, expectedDestination) {
     if (destination.id === book.libraryId) throw new Error('Choose a different library.');
     const copies = await bookCopies(book);
     const inSource = copies.filter(copy => copy.library_id === book.libraryId && copy.id);
@@ -372,8 +372,10 @@
     const sources = sourceId === 'all' ? inSource : inSource.filter(copy => copy.id === sourceId);
     if (!sources.length) throw new Error('The selected copies are no longer in this library. Reopen the move dialog.');
     if (sources.some(copy => copy.on_loan_to)) throw new Error('Return any loans before moving these copies.');
-    if (copies.some(copy => copy.library_id === destination.id)) {
-      throw new Error('The destination already has this book. Check both libraries before trying another move.');
+    const existing = copies.filter(copy => copy.library_id === destination.id);
+    if (existing.length !== expectedDestination.length ||
+      existing.some(copy => !expectedDestination.includes(copy.id))) {
+      throw new Error('Destination copies changed. Check both libraries and reopen the move dialog before trying again.');
     }
 
     const created = [];
@@ -431,6 +433,7 @@
           ${destinations.map(lib => `<option value="${esc(lib.id)}">${esc(lib.name)}</option>`).join('')}
         </select>
         <p>The new copy starts unshelved. Its book details and edition are kept; links specific to the old library, such as shelf and series placement, don’t move.</p>
+        <label id="existingCopyNotice" hidden style="display:none"><input type="checkbox" name="allowExisting" style="width:auto;min-height:0"> The destination already has this title. Add the selected copies alongside the existing copies.</label>
         <p id="moveBookStatus" role="status"></p>
         <div class="actions"><button type="button" id="cancelMoveBook">Cancel</button>
           <button class="primary" type="submit" disabled>Move book</button></div>
@@ -440,6 +443,16 @@
     const copySelect = form.elements.sourceCopy;
     const submit = form.querySelector('[type="submit"]');
     let displayedCopies = [];
+    let displayedAllCopies = [];
+    const notice = document.getElementById('existingCopyNotice');
+    function destinationChanged() {
+      const hasExisting = displayedAllCopies.some(copy => copy.library_id === form.elements.destination.value);
+      notice.hidden = !hasExisting;
+      notice.style.display = hasExisting ? '' : 'none';
+      form.elements.allowExisting.checked = false;
+      form.elements.allowExisting.required = hasExisting;
+    }
+    form.elements.destination.addEventListener('change', destinationChanged);
     document.getElementById('cancelMoveBook').addEventListener('click', () => openBook(book.id));
     form.addEventListener('submit', async event => {
       event.preventDefault();
@@ -447,13 +460,15 @@
       const destination = destinations.find(lib => lib.id === form.elements.destination.value);
       const sourceId = copySelect.value;
       if (!destination || !sourceId) return;
+      const expectedDestination = displayedAllCopies.filter(copy => copy.library_id === destination.id).map(copy => copy.id);
+      if (expectedDestination.length && !form.elements.allowExisting.checked) return;
       moveInProgress = true;
       const close = modal.querySelector('.dialogClose');
-      const controls = [...form.querySelectorAll('button,select'), close];
+      const controls = [...form.querySelectorAll('button,select,input'), close];
       controls.forEach(control => control.disabled = true);
       status.textContent = 'Moving book…';
       try {
-        const moved = await moveLibraryCopy(book, destination, sourceId, displayedCopies);
+        const moved = await moveLibraryCopy(book, destination, sourceId, displayedCopies, expectedDestination);
         modal.close();
         owner = destination.name;
         try { await loadLive(); }
@@ -468,13 +483,15 @@
       }
     });
     try {
-      const copies = (await bookCopies(book)).filter(copy => copy.library_id === book.libraryId && copy.id);
+      displayedAllCopies = await bookCopies(book);
+      const copies = displayedAllCopies.filter(copy => copy.library_id === book.libraryId && copy.id);
       if (!form.isConnected || !modal.open) return;
       if (!copies.length) {
         copySelect.replaceChildren(new Option('No copies found', ''));
         status.textContent = 'Librarium has no physical copy of this book in the source library.';
         return;
       }
+      destinationChanged();
       displayedCopies = copies.map(copy => copy.id);
       copySelect.replaceChildren(new Option('Choose a copy', ''), ...copies.map((copy, index) => {
         const text = [`Copy ${index + 1}`, copy.edition_id ? 'Edition recorded' : 'No edition recorded',
