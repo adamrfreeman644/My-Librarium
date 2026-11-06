@@ -358,15 +358,14 @@
     document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
   };
 
-  async function moveLibraryCopy(book, destination) {
+  const bookCopies = async book =>
+    requireList((await api(`/books/${encodeURIComponent(book.id)}/copies`))?.items);
+
+  async function moveLibraryCopy(book, destination, sourceId) {
     if (destination.id === book.libraryId) throw new Error('Choose a different library.');
-    const path = `/books/${encodeURIComponent(book.id)}/copies`;
-    const readCopies = async () => requireList((await api(path))?.items);
-    const copies = await readCopies();
-    const originals = copies.filter(copy => copy.library_id === book.libraryId);
-    if (originals.length !== 1) throw new Error('This move requires exactly one copy in the source library.');
-    const source = originals[0];
-    if (!source.id) throw new Error('Librarium did not return a valid source copy.');
+    const copies = await bookCopies(book);
+    const source = copies.find(copy => copy.id === sourceId && copy.library_id === book.libraryId);
+    if (!source) throw new Error('The selected copy is no longer in this library. Reopen the move dialog.');
     if (source.on_loan_to) throw new Error('Return the loan before moving this copy.');
     if (copies.some(copy => copy.library_id === destination.id)) {
       throw new Error('The destination already has this book. Check both libraries before trying another move.');
@@ -383,7 +382,7 @@
       method: 'POST', body: JSON.stringify(payload),
     });
     try {
-      const updated = await readCopies();
+      const updated = await bookCopies(book);
       if (!created?.id || !updated.some(copy =>
         copy.id === created.id && copy.id !== source.id && copy.library_id === destination.id &&
         (copy.edition_id || '') === (source.edition_id || '')
@@ -402,11 +401,13 @@
     }
   }
 
-  function showMoveBook(book) {
+  async function showMoveBook(book) {
     const destinations = state.libraries.filter(lib => lib.id !== book.libraryId);
     if (!destinations.length) return;
     show(`<h2>Move to another library</h2><p>Move “${esc(book.title)}” from ${esc(book.owner)}.</p>
       <form id="moveBookForm">
+        <label for="moveSourceCopy">Copy to move</label>
+        <select id="moveSourceCopy" name="sourceCopy" required disabled><option value="">Loading copies…</option></select>
         <label for="moveDestination">Destination library</label>
         <select id="moveDestination" name="destination" required>
           <option value="">Choose a library</option>
@@ -415,23 +416,26 @@
         <p>The new copy starts unshelved. Its book details and edition are kept; links specific to the old library, such as shelf and series placement, don’t move.</p>
         <p id="moveBookStatus" role="status"></p>
         <div class="actions"><button type="button" id="cancelMoveBook">Cancel</button>
-          <button class="primary" type="submit">Move book</button></div>
+          <button class="primary" type="submit" disabled>Move book</button></div>
       </form>`);
     const form = document.getElementById('moveBookForm');
     const status = document.getElementById('moveBookStatus');
+    const copySelect = form.elements.sourceCopy;
+    const submit = form.querySelector('[type="submit"]');
     document.getElementById('cancelMoveBook').addEventListener('click', () => openBook(book.id));
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (moveInProgress) return;
       const destination = destinations.find(lib => lib.id === form.elements.destination.value);
-      if (!destination) return;
+      const sourceId = copySelect.value;
+      if (!destination || !sourceId) return;
       moveInProgress = true;
       const close = modal.querySelector('.dialogClose');
       const controls = [...form.querySelectorAll('button,select'), close];
       controls.forEach(control => control.disabled = true);
       status.textContent = 'Moving book…';
       try {
-        await moveLibraryCopy(book, destination);
+        await moveLibraryCopy(book, destination, sourceId);
         modal.close();
         owner = destination.name;
         try { await loadLive(); }
@@ -445,6 +449,33 @@
         controls.forEach(control => control.disabled = false);
       }
     });
+    try {
+      const copies = (await bookCopies(book)).filter(copy => copy.library_id === book.libraryId && copy.id);
+      if (!form.isConnected || !modal.open) return;
+      if (!copies.length) {
+        copySelect.replaceChildren(new Option('No copies found', ''));
+        status.textContent = 'Librarium has no physical copy of this book in the source library.';
+        return;
+      }
+      copySelect.replaceChildren(new Option('Choose a copy', ''), ...copies.map((copy, index) => {
+        const text = [`Copy ${index + 1}`, copy.edition_id ? 'Edition recorded' : 'No edition recorded',
+          copy.condition, copy.location_name, copy.is_signed ? 'Signed' : '', copy.on_loan_to ? 'On loan' : '']
+          .filter(Boolean).join(' · ');
+        const option = new Option(text, copy.id);
+        option.disabled = Boolean(copy.on_loan_to);
+        return option;
+      }));
+      copySelect.disabled = false;
+      if (copies.length === 1 && !copies[0].on_loan_to) copySelect.value = copies[0].id;
+      if (copies.every(copy => copy.on_loan_to)) {
+        status.textContent = 'Return the loan before moving this copy.';
+        return;
+      }
+      submit.disabled = false;
+    } catch {
+      copySelect.replaceChildren(new Option('Copies unavailable', ''));
+      status.textContent = 'Could not load the source copies. Reopen the move dialog to try again.';
+    }
   }
 
   let moveInProgress = false;
