@@ -237,25 +237,79 @@
       showLiveSeries(visible[Number(button.dataset.seriesIndex)])));
   };
 
+  function seriesTiles(linked, known, total) {
+    const positions = new Map();
+    const unnumbered = [];
+    for (const book of linked) {
+      const position = Number(book.position);
+      if (!(position > 0)) { unnumbered.push(book); continue; }
+      const group = positions.get(position) || [];
+      group.push(book);
+      positions.set(position, group);
+    }
+    const covered = new Set();
+    for (const book of linked) {
+      const start = Number(book.position), end = Number(book.position_end);
+      if (Number.isInteger(start) && start > 0 && end >= start)
+        for (let n = start + 1; n <= Math.min(end, start + 1000); n++) covered.add(n);
+    }
+    for (const volume of known) {
+      const position = Number(volume.position);
+      if (position > 0 && !positions.has(position) && !covered.has(position))
+        positions.set(position, [{ ...volume, held: false }]);
+    }
+    const numbered = [...positions.keys()].filter(Number.isInteger);
+    const last = Math.min(1000, Math.max(Number(total) || 0, 0, ...numbered));
+    for (let position = 1; position <= last; position++) {
+      if (!positions.has(position) && !covered.has(position))
+        positions.set(position, [{ position, held: false }]);
+    }
+    return [...positions.entries()].sort((a, b) => a[0] - b[0])
+      .flatMap(([, entries]) => entries).concat(unnumbered);
+  }
+
   async function showLiveSeries({entry, lib}) {
     show(`<div class="eyebrow">${esc(lib.name)}</div><h2>${esc(entry.name || 'Untitled series')}</h2>
       ${entry.description ? `<p>${esc(entry.description)}</p>` : ''}
-      <div id="liveSeriesBooks" class="shelfBooks" role="status">Loading linked books…</div>
+      <div id="liveSeriesBooks" class="shelfBooks" aria-live="polite">Loading volumes…</div>
       <div class="actions"><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a></div>`);
     const panel = document.getElementById('liveSeriesBooks');
     try {
-      const entries = requireList(await api(`${seriesPath(lib)}/${encodeURIComponent(entry.id)}/books`));
+      const path = `${seriesPath(lib)}/${encodeURIComponent(entry.id)}`;
+      const [linked, known] = await Promise.all([
+        api(`${path}/books`).then(requireList),
+        api(`${path}/volumes`).then(requireList).catch(() => []),
+      ]);
       if (!panel.isConnected || !modal.open) return;
-      entries.sort((a, b) => Number(a.position || 0) - Number(b.position || 0));
-      panel.innerHTML = entries.map((book, index) => `<div class="volume">
-        <span class="volnumber">${esc(String(book.position || index + 1))}</span>
-        <div class="voltext"><b>${esc(book.title || 'Untitled book')}</b>
-        ${books.some(b => b.id === book.book_id) ? `<button type="button" data-series-book="${index}">View book</button>` : ''}
-        </div></div>`).join('') || '<p>No books are linked to this series yet.</p>';
+      const byID = new Map(books.filter(b => b.libraryId === lib.id).map(b => [b.id, b]));
+      const tiles = seriesTiles(linked, known, entry.total_count);
+      panel.innerHTML = tiles.length ? `<div class="seriesVolumes">${tiles.map((volume, index) => {
+        const book = byID.get(volume.book_id);
+        const held = volume.held ?? Boolean(book);
+        const number = volume.position > 0
+          ? `Vol. ${volume.position}${volume.position_end > volume.position ? `–${volume.position_end}` : ''}`
+          : '';
+        const title = volume.title || book?.title || '';
+        const cover = held ? (volume.cover_url || book?.cover || '') : '';
+        const caption = title || number || 'Untitled volume';
+        const art = `<div class="seriesVolumeArt ${held ? 'seriesVolumeOwned' : 'seriesVolumeMissing'}">
+          <div class="seriesVolumeFallback"><strong>${esc(held ? caption : 'Missing')}</strong>
+          ${!held && title ? `<span>${esc(title)}</span>` : ''}</div>
+          ${cover ? `<img ${cover.startsWith('/api/') ? `data-library-cover="${esc(cover)}"` : `src="${esc(cover)}" loading="lazy"`}
+            alt="${esc(caption)} cover" onload="this.parentElement.classList.add('has-cover-image')"
+            onerror="this.parentElement.classList.remove('has-cover-image');this.remove()">` : ''}</div>`;
+        return `<div class="seriesVolumeTile">${held && book
+          ? `<button type="button" class="seriesVolumeButton" data-series-book="${index}" aria-label="View ${esc(caption)}">${art}</button>`
+          : art}
+          ${number ? `<small>${esc(number)}</small>` : ''}`
+          + `${held && title ? `<span class="seriesVolumeTitle">${esc(title)}</span>` : ''}</div>`;
+      }).join('')}</div>` : '<p>No volumes are listed for this series yet.</p>';
       panel.querySelectorAll('[data-series-book]').forEach(button => button.addEventListener('click', () =>
-        openBook(entries[Number(button.dataset.seriesBook)].book_id)));
+        openBook(tiles[Number(button.dataset.seriesBook)].book_id)));
+      clearCovers();
+      loadCovers();
     } catch {
-      panel.textContent = 'Linked books could not be loaded. Try opening this series again.';
+      panel.textContent = 'Volumes could not be loaded. Try opening this series again.';
     }
   }
 
