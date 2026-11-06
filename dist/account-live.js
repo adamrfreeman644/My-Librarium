@@ -361,44 +361,61 @@
   const bookCopies = async book =>
     requireList((await api(`/books/${encodeURIComponent(book.id)}/copies`))?.items);
 
-  async function moveLibraryCopy(book, destination, sourceId) {
+  async function moveLibraryCopy(book, destination, sourceId, displayedCopies) {
     if (destination.id === book.libraryId) throw new Error('Choose a different library.');
     const copies = await bookCopies(book);
-    const source = copies.find(copy => copy.id === sourceId && copy.library_id === book.libraryId);
-    if (!source) throw new Error('The selected copy is no longer in this library. Reopen the move dialog.');
-    if (source.on_loan_to) throw new Error('Return the loan before moving this copy.');
+    const inSource = copies.filter(copy => copy.library_id === book.libraryId && copy.id);
+    if (sourceId === 'all' && (inSource.length !== displayedCopies.length ||
+      inSource.some(copy => !displayedCopies.includes(copy.id)))) {
+      throw new Error('The source copies changed. Reopen the move dialog before moving all copies.');
+    }
+    const sources = sourceId === 'all' ? inSource : inSource.filter(copy => copy.id === sourceId);
+    if (!sources.length) throw new Error('The selected copies are no longer in this library. Reopen the move dialog.');
+    if (sources.some(copy => copy.on_loan_to)) throw new Error('Return any loans before moving these copies.');
     if (copies.some(copy => copy.library_id === destination.id)) {
       throw new Error('The destination already has this book. Check both libraries before trying another move.');
     }
 
-    const payload = { book_id: book.id };
-    for (const key of ['edition_id', 'acquired_at', 'acquired_from', 'price_minor',
-      'price_currency', 'condition', 'is_signed', 'notes']) {
-      if (source[key] != null) payload[key] = source[key];
-    }
-
-    // Keep the original unless we can verify the new copy and recheck the source.
-    const created = await api(`/libraries/${encodeURIComponent(destination.id)}/copies`, {
-      method: 'POST', body: JSON.stringify(payload),
-    });
+    const created = [];
     try {
+      for (const source of sources) {
+        const payload = { book_id: book.id };
+        for (const key of ['edition_id', 'acquired_at', 'acquired_from', 'price_minor',
+          'price_currency', 'condition', 'is_signed', 'notes']) {
+          if (source[key] != null) payload[key] = source[key];
+        }
+        const copy = await api(`/libraries/${encodeURIComponent(destination.id)}/copies`, {
+          method: 'POST', body: JSON.stringify(payload),
+        });
+        if (!copy?.id || created.some(id => id === copy.id) || sources.some(s => s.id === copy.id)) {
+          throw new Error('Librarium did not return a distinct destination copy.');
+        }
+        created.push(copy.id);
+      }
       const updated = await bookCopies(book);
-      if (!created?.id || !updated.some(copy =>
-        copy.id === created.id && copy.id !== source.id && copy.library_id === destination.id &&
-        (copy.edition_id || '') === (source.edition_id || '')
-      )) throw new Error('Destination copy could not be verified.');
-      const stillThere = updated.find(copy => copy.id === source.id && copy.library_id === book.libraryId);
-      if (!stillThere || stillThere.on_loan_to || stillThere.updated_at !== source.updated_at) {
-        throw new Error('The original changed during the move.');
+      for (const [index, source] of sources.entries()) {
+        if (!updated.some(copy =>
+          copy.id === created[index] && copy.library_id === destination.id &&
+          (copy.edition_id || '') === (source.edition_id || '')
+        )) throw new Error('A destination copy could not be verified.');
+        const original = updated.find(copy => copy.id === source.id && copy.library_id === book.libraryId);
+        if (!original || original.on_loan_to || original.updated_at !== source.updated_at) {
+          throw new Error('A source copy changed during the move.');
+        }
       }
     } catch (error) {
-      throw new Error(`${error.message} The original was kept. Check the destination for a new copy.`);
+      throw new Error(`${error.message} All originals were kept. Check the destination for any new copies.`);
     }
+    let retired = 0;
     try {
-      await api(`/copies/${encodeURIComponent(source.id)}`, { method: 'DELETE' });
+      for (const source of sources) {
+        await api(`/copies/${encodeURIComponent(source.id)}`, { method: 'DELETE' });
+        retired++;
+      }
     } catch {
-      throw new Error('The destination copy was verified, but removal could not be confirmed. Check both libraries before retrying.');
+      throw new Error(`All ${created.length} destination copies were verified. Removal was confirmed for ${retired} of ${sources.length} originals. Check both libraries before retrying.`);
     }
+    return sources.length;
   }
 
   async function showMoveBook(book) {
@@ -422,6 +439,7 @@
     const status = document.getElementById('moveBookStatus');
     const copySelect = form.elements.sourceCopy;
     const submit = form.querySelector('[type="submit"]');
+    let displayedCopies = [];
     document.getElementById('cancelMoveBook').addEventListener('click', () => openBook(book.id));
     form.addEventListener('submit', async event => {
       event.preventDefault();
@@ -435,12 +453,12 @@
       controls.forEach(control => control.disabled = true);
       status.textContent = 'Moving book…';
       try {
-        await moveLibraryCopy(book, destination, sourceId);
+        const moved = await moveLibraryCopy(book, destination, sourceId, displayedCopies);
         modal.close();
         owner = destination.name;
         try { await loadLive(); }
         catch { toast('Book moved. Refresh to see the updated library.'); return; }
-        toast(`Book moved to ${destination.name}`);
+        toast(moved === 1 ? `Book moved to ${destination.name}` : `${moved} copies moved to ${destination.name}`);
       } catch (error) {
         status.textContent = error.message;
         if (!status.isConnected) toast(error.message);
@@ -457,6 +475,7 @@
         status.textContent = 'Librarium has no physical copy of this book in the source library.';
         return;
       }
+      displayedCopies = copies.map(copy => copy.id);
       copySelect.replaceChildren(new Option('Choose a copy', ''), ...copies.map((copy, index) => {
         const text = [`Copy ${index + 1}`, copy.edition_id ? 'Edition recorded' : 'No edition recorded',
           copy.condition, copy.location_name, copy.is_signed ? 'Signed' : '', copy.on_loan_to ? 'On loan' : '']
@@ -465,6 +484,9 @@
         option.disabled = Boolean(copy.on_loan_to);
         return option;
       }));
+      if (copies.length > 1 && copies.every(copy => !copy.on_loan_to)) {
+        copySelect.add(new Option(`All copies (${copies.length})`, 'all'), 1);
+      }
       copySelect.disabled = false;
       if (copies.length === 1 && !copies[0].on_loan_to) copySelect.value = copies[0].id;
       if (copies.every(copy => copy.on_loan_to)) {
