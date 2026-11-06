@@ -333,7 +333,15 @@
     document.querySelectorAll('[data-library-choice]').forEach(button => button.addEventListener('click', () => { owner = choices[Number(button.dataset.libraryChoice)]; render(); }));
   };
   // Shelf dialogs generate rows outside render().
-  window.row = b => `<div class="rowbook" onclick="openBook(${esc(JSON.stringify(b.id))})"><div><b>${esc(b.title)}</b><br><small>${esc(b.author)} · ${esc(b.owner)}</small></div><span>${esc(b.shelf || 'Assign shelf →')}</span></div>`;
+  window.row = (b, showCover = false) => {
+    const description = `<b>${esc(b.title)}</b><br><small>${esc(b.author)} · ${esc(b.owner)}</small>`;
+    const thumbnail = showCover ? `<span class="unshelvedCover" aria-hidden="true">▤${b.cover
+      ? `<img ${b.cover.startsWith('/api/') ? `data-library-cover="${esc(b.cover)}"` : `src="${esc(b.cover)}" loading="lazy"`}
+        alt="" onerror="this.remove()">` : ''}</span>` : '';
+    return `<div class="rowbook" onclick="openBook(${esc(JSON.stringify(b.id))})">${showCover
+      ? `<div class="unshelvedBook">${thumbnail}<div class="unshelvedBookText">${description}</div></div>`
+      : `<div>${description}</div>`}<span>${esc(b.shelf || 'Assign shelf →')}</span></div>`;
+  };
   window.openBook = function (id = null, shelf = '') {
     if (!state.loaded || !state.libraries.length) { toast('Sign in to a library first.'); return; }
     const b = books.find(x => x.id === id);
