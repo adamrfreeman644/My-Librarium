@@ -1,0 +1,211 @@
+/* Live Librarium adapter. Catalogue records always come from the API. */
+(() => {
+  const API = '/api/v1';
+  if (localStorage.getItem('librarium-live-migrated') !== '1') {
+    ['lib-books-v1', 'lib-series-v1', 'lib-sort-plan-v1', 'lib-agent-queue-v1', 'lib-agent-log-v1'].forEach(key => localStorage.removeItem(key));
+    localStorage.setItem('librarium-live-migrated', '1');
+  }
+  const liveStyle = document.createElement('style');
+  liveStyle.textContent = ".brand:after{content:'LIVE'!important;color:#2e5848!important}";
+  document.head.appendChild(liveStyle);
+  const savedToken = sessionStorage.getItem('librarium-access');
+  const state = { token: savedToken && !['undefined', 'null'].includes(savedToken) ? savedToken : '', libraries: [], shelves: new Map(), loaded: false };
+  if (!state.token) sessionStorage.removeItem('librarium-access');
+  const accountAction = document.getElementById('accountAction');
+  function updateAccountAction() {
+    accountAction.textContent = state.token ? 'Log out' : 'Log in';
+    accountAction.disabled = false;
+  }
+  accountAction.addEventListener('click', () => {
+    if (state.token) {
+      sessionStorage.removeItem('librarium-access');
+      window.location.reload();
+      return;
+    }
+    if (!document.getElementById('liveLogin')) loginScreen();
+    document.getElementById('liveIdentifier').focus();
+  });
+  updateAccountAction();
+
+
+  async function api(path, options = {}) {
+    const headers = { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers };
+    if (state.token) headers.Authorization = `Bearer ${state.token}`;
+    const response = await fetch(API + path, { ...options, headers });
+    if (response.status === 401) {
+      sessionStorage.removeItem('librarium-access');
+      state.token = '';
+      state.loaded = false;
+      state.libraries = [];
+      if (path !== '/auth/login') loginScreen('Your session expired. Sign in again.');
+      throw new Error(path === '/auth/login' ? 'Username or password was not accepted.' : 'Your session expired. Sign in again.');
+    }
+    if (!response.ok) {
+      let message = `Librarium request failed (${response.status})`;
+      try { message = (await response.json()).error || message; } catch {}
+      throw new Error(message);
+    }
+    if (response.status === 204) return null;
+    let payload;
+    try { payload = await response.json(); }
+    catch { throw new Error('The server did not return Librarium JSON. Check the /api/v1 proxy.'); }
+    // Librarium's respond.JSON wraps every successful result, including login.
+    return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+  }
+
+  function loginScreen(message = '') {
+    updateAccountAction();
+    if (modal.open) modal.close();
+    books = [];
+    state.loaded = false;
+    state.libraries = [];
+    document.querySelector('.heading > button').disabled = true;
+    document.getElementById('owners').innerHTML = '';
+    document.getElementById('pageTitle').textContent = 'Connect to your library.';
+    document.getElementById('subtitle').textContent = 'Sign in to the live Librarium catalogue. No demo records are used.';
+    document.getElementById('content').innerHTML = `<div class="panel" style="max-width:520px;margin:35px auto">
+      <div class="eyebrow">Live Librarium</div><h2 style="margin:8px 0 6px">Sign in</h2>
+      <p>Credentials are sent only to your own Librarium API. The access token is kept in this browser tab session.</p>
+      ${message ? `<p role="alert" style="margin-top:18px;color:#aa4337">${esc(message)}</p>` : ''}
+      <form id="liveLogin"><label for="liveIdentifier">Username or email</label><input id="liveIdentifier" name="identifier" autocomplete="username" required>
+      <label for="livePassword">Password</label><input id="livePassword" name="password" type="password" autocomplete="current-password" required>
+      <div class="actions"><button class="primary">Sign in to live catalogue</button></div></form></div>`;
+    document.getElementById('liveLogin').addEventListener('submit', login);
+  }
+
+  async function login(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button'); button.disabled = true; button.textContent = 'Signing in…';
+    try {
+      const data = await api('/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+      if (typeof data?.access_token !== 'string' || !data.access_token) throw new Error('The login response did not include an access token.');
+      state.token = data.access_token; sessionStorage.setItem('librarium-access', state.token);
+      updateAccountAction();
+      await loadLive();
+    } catch (error) { loginScreen(error.message); }
+  }
+
+  const authorOf = b => (b.contributors || []).filter(c => !c.role || c.role === 'author').map(c => c.name).join(', ') || 'Unknown author';
+  const shelfCode = b => (b.shelves || []).map(s => s.name).find(n => /^[A-I][1-8]$/i.test(n || ''))?.toUpperCase() || null;
+  const normaliseBook = (b, lib) => ({
+    id: b.id, libraryId: lib.id, title: b.title || 'Untitled', author: authorOf(b), owner: lib.name,
+    shelf: shelfCode(b), shelfIds: (b.shelves || []).map(s => s.id), color: '#476451', cover: b.cover_url || '',
+    isbn: '', added: Date.parse(b.created_at || '') || Date.now(), raw: b
+  });
+
+  async function allBooks(lib) {
+    const result = [];
+    for (let page = 1; ; page++) {
+      const data = await api(`/libraries/${encodeURIComponent(lib.id)}/books?page=${page}&per_page=100`);
+      const items = Array.isArray(data) ? data : (data.items || []);
+      result.push(...items.map(b => normaliseBook(b, lib)));
+      if (!items.length || Array.isArray(data) || (Number.isFinite(data.total) ? result.length >= data.total : items.length < (data.per_page || 100))) break;
+    }
+    return result;
+  }
+
+  async function loadLive() {
+    document.getElementById('content').innerHTML = '<div class="emptymsg">Loading the live catalogue…</div>';
+    state.libraries = await api('/libraries');
+    if (!Array.isArray(state.libraries)) throw new Error('The server returned an invalid library list.');
+    const shelfSets = await Promise.all(state.libraries.map(async lib => {
+      const data = await api(`/libraries/${lib.id}/shelves`).catch(() => []);
+      return [lib.id, Array.isArray(data) ? data : (data.items || [])];
+    }));
+    state.shelves = new Map(shelfSets);
+    books = (await Promise.all(state.libraries.map(allBooks))).flat();
+    state.loaded = true;
+    document.querySelector('.heading > button').disabled = !state.libraries.length;
+    seriesData = [];
+    localStorage.removeItem('lib-books-v1'); localStorage.removeItem('lib-series-v1');
+    owner = state.libraries.some(l => l.name === owner) ? owner : (state.libraries[0]?.name || 'Everyone');
+    render();
+    if (!state.libraries.length) document.getElementById('content').innerHTML = '<div class="emptymsg">Signed in successfully. This account has no accessible libraries. Check library membership in Librarium.</div>';
+    document.querySelector('.asideFoot').innerHTML = `LIVE CATALOGUE<br>${state.libraries.map(l => esc(l.name)).join(' · ')}<hr style="border:0;border-top:1px solid #d5dbcc;margin:20px 0">${books.length} real books · shared through Librarium`;
+    toast(`Loaded ${books.length} books from Librarium`);
+  }
+
+  const baseRender = window.render;
+  window.render = function () {
+    if (!state.loaded) { loginScreen(); return; }
+    baseRender();
+    // The prototype interpolated numeric IDs into inline handlers. Live IDs
+    // are UUID strings. Repair generated links, including local-agent cards.
+    document.querySelectorAll('[onclick], [onkeydown]').forEach(element => {
+      for (const attribute of ['onclick', 'onkeydown']) {
+        const handler = element.getAttribute(attribute);
+        if (handler) element.setAttribute(attribute, handler.replace(/openBook\(([a-f0-9-]{36})\)/gi, (_, id) => `openBook(${JSON.stringify(id)})`));
+      }
+    });
+    if (!state.libraries.length) return;
+    const choices = [...state.libraries.map(l => l.name), 'Everyone'];
+    document.getElementById('owners').innerHTML = choices.map((name, index) => `<button data-library-choice="${index}" class="${owner === name ? 'active' : ''}">${name === 'Everyone' ? 'Everyone' : esc(name) + '’s books'} <span style="opacity:.55;margin-left:5px">${books.filter(b => name === 'Everyone' || b.owner === name).length}</span></button>`).join('');
+    document.querySelectorAll('[data-library-choice]').forEach(button => button.addEventListener('click', () => { owner = choices[Number(button.dataset.libraryChoice)]; render(); }));
+  };
+  // Shelf dialogs generate rows outside render().
+  window.row = b => `<div class="rowbook" onclick="openBook(${esc(JSON.stringify(b.id))})"><div><b>${esc(b.title)}</b><br><small>${esc(b.author)} · ${esc(b.owner)}</small></div><span>${esc(b.shelf || 'Assign shelf →')}</span></div>`;
+  window.openBook = function (id = null, shelf = '') {
+    if (!state.loaded || !state.libraries.length) { toast('Sign in to a library first.'); return; }
+    const b = books.find(x => x.id === id);
+    const libs = state.libraries.map(l => `<option value="${l.id}" ${b?.libraryId === l.id || (!b && owner === l.name) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
+    show(`<div class="eyebrow">Live Librarium record</div><h1 style="font-size:37px">${b ? 'Edit book' : 'Add book'}</h1>
+      <form id="bookForm" onsubmit="event.preventDefault();saveBook(${b ? `'${b.id}'` : 'null'})">
+      <label>Title</label><input name="title" required value="${esc(b?.title || '')}">
+      <label>Author</label><input name="author" required value="${esc(b?.author || '')}">
+      <label>Library</label><select name="libraryId" ${b ? 'disabled' : ''}>${libs}</select>
+      <label>Physical shelf</label><select name="shelf">${shelfOptions(b?.shelf || shelf)}</select>
+      <p style="font-size:11px;margin-top:8px">Shelf moves are written back to matching Librarium shelves such as A1–I8.</p>
+      <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
+  };
+
+  async function setShelf(book, code) {
+    const available = state.shelves.get(book.libraryId) || [];
+    // Validate the destination before removing anything, and retain unrelated
+    // catalogue shelves (e.g. favourites and reading lists).
+    const target = code ? available.find(s => s.name.toUpperCase() === code.toUpperCase()) : null;
+    if (code && !target) throw new Error(`Create shelf ${code} in Librarium before assigning books to it.`);
+    const current = available.filter(s => book.shelfIds.includes(s.id) && /^[A-I][1-8]$/i.test(s.name));
+    if (code) {
+      if (!book.shelfIds.includes(target.id)) await api(`/libraries/${book.libraryId}/shelves/${target.id}/books`, { method: 'POST', body: JSON.stringify({ book_id: book.id }) });
+    }
+    for (const shelf of current) if (shelf.id !== target?.id) await api(`/libraries/${book.libraryId}/shelves/${shelf.id}/books/${book.id}`, { method: 'DELETE' });
+  }
+
+  window.saveBook = async function (id) {
+    const form = document.getElementById('bookForm'); const data = Object.fromEntries(new FormData(form));
+    try {
+      if (id) {
+        const book = books.find(b => b.id === id);
+        const raw = book.raw;
+        const contributors = data.author.trim() === book.author ? raw.contributors : [
+          ...(raw.contributors || []).filter(c => c.role && c.role !== 'author'),
+          { name: data.author.trim(), role: 'author' }
+        ];
+        await api(`/libraries/${book.libraryId}/books/${id}`, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: (raw.genres || []).map(x => x.id), tag_ids: (raw.tags || []).map(x => x.id) }) });
+        await setShelf(book, data.shelf);
+      } else {
+        const mediaTypes = await api('/media-types');
+        const mediaType = mediaTypes.find(t => /^(book|books)$/i.test(t.name));
+        if (!mediaType) throw new Error('No Book media type is configured in Librarium.');
+        const created = await api(`/libraries/${data.libraryId}/books`, { method: 'POST', body: JSON.stringify({ title: data.title.trim(), media_type_id: mediaType.id, contributors: [{ name: data.author.trim(), role: 'author' }] }) });
+        const lib = state.libraries.find(l => l.id === data.libraryId); await setShelf(normaliseBook(created, lib), data.shelf);
+      }
+      modal.close(); await loadLive(); toast('Saved to the live Librarium database');
+    } catch (error) { toast(error.message); }
+  };
+
+  window.confirmDelete = function (id) { const b = books.find(x => x.id === id); show(`<h2>Remove from ${esc(b.owner)}?</h2><p style="margin-top:15px">This retires that library’s copy of “${esc(b.title)}”.</p><div class="actions"><button onclick="openBook('${id}')">Cancel</button><button class="danger" onclick="deleteBook('${id}')">Remove copy</button></div>`); };
+  window.deleteBook = async function (id) { const b = books.find(x => x.id === id); try { await api(`/libraries/${b.libraryId}/books/${id}`, { method: 'DELETE' }); modal.close(); await loadLive(); } catch (error) { toast(error.message); } };
+
+  const baseComplete = window.completeSortMove;
+  window.completeSortMove = async function (id, checked) {
+    const move = sortPlan?.moves.find(m => m.id === id); const book = move?.kind === 'book' ? books.find(b => b.id === move.bookId) : null;
+    if (book) { try { await setShelf(book, move.to); } catch (error) { toast(error.message); render(); return; } }
+    baseComplete(id, checked);
+    if (book) await loadLive();
+  };
+
+  if (state.token) loadLive().catch(error => loginScreen(error.message)); else loginScreen();
+})();
+
