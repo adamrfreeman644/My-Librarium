@@ -6,7 +6,7 @@
     localStorage.setItem('librarium-live-migrated', '1');
   }
   const liveStyle = document.createElement('style');
-  liveStyle.textContent = ".brand:after{content:'LIVE'!important;color:#2e5848!important}";
+  liveStyle.textContent = ".brand:after{content:'LIVE'!important;color:var(--dark-link,#2e5848)!important}";
   document.head.appendChild(liveStyle);
   const session = window.LibrariumSession;
   const state = { get token(){return session.access()}, libraries: [], shelves: new Map(), loaded: false };
@@ -403,22 +403,30 @@
     const libs = state.libraries.map(l => `<option value="${l.id}" ${b?.libraryId === l.id || (!b && owner === l.name) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
     show(`<div class="eyebrow">Live Librarium record</div><h1 style="font-size:37px">${b ? 'Edit book' : 'Add book'}</h1>
       <form id="bookForm" data-library-id="${esc(b?.libraryId || '')}" onsubmit="event.preventDefault();saveBook(${b ? `'${b.id}'` : 'null'})">
-      <label>Title</label><input name="title" required value="${esc(b?.title || '')}">
-      <label>Author</label><input name="author" required value="${esc(b?.author || '')}">
-      <label>Library</label><select name="libraryId" ${b ? 'disabled' : ''}>${libs}</select>
-      ${b && state.libraries.length > 1 ? '<button id="moveBookButton" type="button" style="margin-top:8px">Move to another library</button>' : ''}
-      <label>Physical shelf</label><select name="shelf">${shelfOptions(b?.shelf || shelf)}</select>
-      <p style="font-size:11px;margin-top:8px">Shelf moves are written back to matching Librarium shelves such as A1–I8.</p>
-      ${b ? `<label class="standaloneOption"><input id="standaloneBook" name="standalone" type="checkbox" ${b.standalone?'checked':''} ${b.raw.series?.length?'disabled':''}> Mark as standalone</label>
-        <p class="standaloneHint">${b.raw.series?.length?'This book already belongs to a series.':'Save to Librarium to keep this label. Standalone books are skipped in Series Review.'}</p>` : ''}
+      <div class="bookEditGrid">
+      <div class="bookDetailsFields">
+        <label>Title<input name="title" required value="${esc(b?.title || '')}"></label>
+        <label>Author<input name="author" required value="${esc(b?.author || '')}"></label>
+        <div class="bookPlacement">
+          ${b ? `<div><span class="bookLibraryLabel">Library</span><span class="bookLibraryValue">${esc(b.owner)}</span></div>`
+              : `<label>Library<select name="libraryId">${libs}</select></label>`}
+          <label>Physical shelf<select name="shelf">${shelfOptions(b?.shelf || shelf)}</select></label>
+        </div>
+        ${b && state.libraries.length > 1 ? '<div><button id="moveBookButton" type="button">Move to another library</button></div>' : ''}
+        ${b ? `<label class="standaloneOption"><input id="standaloneBook" name="standalone" type="checkbox" ${b.standalone?'checked':''} ${b.raw.series?.length?'disabled':''}> Mark as standalone</label>
+          <p class="standaloneHint">${b.raw.series?.length?'This book already belongs to a series.':'Standalone books are skipped in Series Review.'}</p>` : ''}
+      </div>
       ${b ? `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
         <legend>Add to existing series</legend>
         <p class="bookSeriesMembership"></p>
-        <label for="editSeriesChoice">Series</label><select id="editSeriesChoice" disabled><option>Loading series…</option></select>
+        <div class="bookSeriesFields">
+          <label for="editSeriesChoice">Series<select id="editSeriesChoice" disabled><option>Loading series…</option></select></label>
+          <label for="editSeriesVolume">Volume number<input id="editSeriesVolume" type="text" inputmode="decimal" disabled></label>
+        </div>
         <div class="editSeriesPreview" hidden aria-live="polite"></div>
-        <label for="editSeriesVolume">Volume number</label><input id="editSeriesVolume" type="text" inputmode="decimal" disabled>
         <button type="button" disabled>Add to series</button><p role="status"></p>
       </fieldset>` : ''}
+      </div>
       <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}','${b.libraryId}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
     document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
     if (b) setupBookSeries(b);
