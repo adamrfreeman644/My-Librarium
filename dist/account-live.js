@@ -293,6 +293,17 @@
       showLiveSeries(visible[Number(button.dataset.seriesIndex)])));
   };
 
+  const seriesNameKey = name => String(name||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+  async function createSavedSeries(lib,payload) {
+    const base=seriesPath(lib);
+    const existing=requireList(await api(base));
+    if(existing.some(run=>seriesNameKey(run.name)===seriesNameKey(payload.name)))
+      throw Error('A series with this name already exists in '+lib.name+'.');
+    const created=await api(base,{method:'POST',body:JSON.stringify(payload)});
+    if(!created?.id)throw Error('Librarium did not confirm creation. Check the series list before retrying.');
+    return created;
+  }
+
   function openNewSeries() {
     const initial = state.libraries.find(lib=>lib.name===owner)?.id || '';
     show(`<div class="eyebrow">Book series</div><h2>New series</h2>
@@ -317,7 +328,6 @@
     const form=document.getElementById('newSeriesForm');
     const status=document.getElementById('newSeriesStatusMessage');
     const controls=[...form.querySelectorAll('button,input,select,textarea'),modal.querySelector('.dialogClose')];
-    const key=name=>String(name||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
     let busy=false;
     form.addEventListener('submit',async event=>{
       event.preventDefault();
@@ -329,11 +339,7 @@
       if(fields.count)payload.total_count=Number(fields.count);
       busy=true;controls.forEach(control=>{control.disabled=true;});status.textContent='Creating series…';
       try{
-        const base=seriesPath(lib);
-        const existing=requireList(await api(base));
-        if(existing.some(run=>key(run.name)===key(name)))throw Error('A series with this name already exists in '+lib.name+'.');
-        const created=await api(base,{method:'POST',body:JSON.stringify(payload)});
-        if(!created?.id)throw Error('Librarium did not confirm creation. Check the series list before retrying.');
+        const created=await createSavedSeries(lib,payload);
         liveSeries=[...liveSeries,{entry:created,lib}].sort((a,b)=>String(a.entry.name).localeCompare(String(b.entry.name)));
         if(modal.open&&form.isConnected)modal.close();
         owner=lib.name;
@@ -472,13 +478,25 @@
       ${b ? `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
         <legend>Add to existing series</legend>
         <p class="bookSeriesMembership"></p>
+        <details class="inlineSeriesCreate">
+          <summary>＋ New series</summary>
+          <p>Create a series in ${esc(b.owner)}.</p>
+          <label for="inlineSeriesName">Series name</label><input id="inlineSeriesName" maxlength="160">
+          <div class="newSeriesFields">
+            <div><label for="inlineSeriesStatus">Status</label><select id="inlineSeriesStatus"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
+            <div><label for="inlineSeriesCount">Total volumes (optional)</label><input id="inlineSeriesCount" inputmode="numeric"></div>
+          </div>
+          <label for="inlineSeriesDescription">Description (optional)</label><textarea id="inlineSeriesDescription" rows="2" maxlength="2000"></textarea>
+          <button id="inlineSeriesSave" type="button" class="primary">Create series</button>
+          <p id="inlineSeriesMessage" role="status"></p>
+        </details>
         <div class="authorSeriesSuggestions" hidden><strong>Suggested by author</strong><div class="authorSeriesChoices"></div></div>
         <div class="bookSeriesFields">
           <label for="editSeriesChoice">Series<select id="editSeriesChoice" disabled><option>Loading series…</option></select></label>
           <label for="editSeriesVolume">Volume number<input id="editSeriesVolume" type="text" inputmode="decimal" disabled></label>
         </div>
         <div class="editSeriesPreview" hidden aria-live="polite"></div>
-        <button type="button" disabled>Add to series</button><p role="status"></p>
+        <button id="addBookToSeries" type="button" disabled>Add to series</button><p id="editSeriesMessage" role="status"></p>
       </fieldset>` : ''}
       </div>
       <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}','${b.libraryId}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
@@ -510,8 +528,8 @@
     if (!panel) return;
     const select = panel.querySelector('#editSeriesChoice');
     const volume = panel.querySelector('#editSeriesVolume');
-    const button = panel.querySelector('button');
-    const status = panel.querySelector('[role=status]');
+    const button = panel.querySelector('#addBookToSeries');
+    const status = panel.querySelector('#editSeriesMessage');
     const membership = panel.querySelector('.bookSeriesMembership');
     const preview = panel.querySelector('.editSeriesPreview');
     const suggestions = panel.querySelector('.authorSeriesSuggestions');
@@ -619,6 +637,47 @@
       status.textContent = 'Could not load series. ' + error.message;
       return;
     }
+    const creator = panel.querySelector('.inlineSeriesCreate');
+    const createButton = creator.querySelector('#inlineSeriesSave');
+    const createStatus = creator.querySelector('#inlineSeriesMessage');
+    const nameField = creator.querySelector('#inlineSeriesName');
+    const countField = creator.querySelector('#inlineSeriesCount');
+    creator.addEventListener('keydown', event=>{
+      if(event.key==='Enter'&&event.target.tagName==='INPUT'){
+        event.preventDefault();
+        createButton.click();
+      }
+    });
+    createButton.addEventListener('click',async()=>{
+      const lib=state.libraries.find(item=>item.id===book.libraryId);
+      const name=nameField.value.trim().replace(/\s+/g,' ');
+      const count=countField.value.trim();
+      if(!lib||!name){createStatus.textContent='Enter a series name.';nameField.focus();return;}
+      if(count&&(!/^\d+$/.test(count)||Number(count)<1||Number(count)>1000)){
+        createStatus.textContent='Enter a whole volume count from 1 to 1000.';countField.focus();return;
+      }
+      const fields=[...creator.querySelectorAll('button,input,select,textarea')];
+      const payload={name,status:creator.querySelector('#inlineSeriesStatus').value,
+        description:creator.querySelector('#inlineSeriesDescription').value.trim()};
+      if(count)payload.total_count=Number(count);
+      fields.forEach(field=>{field.disabled=true;});createStatus.textContent='Creating series…';
+      try{
+        const created=await createSavedSeries(lib,payload);
+        seriesRequest=null;
+        if(!panel.isConnected||!modal.open)return;
+        runs.push(created);
+        runs.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+        refreshControls();
+        creator.open=false;
+        nameField.value=countField.value=creator.querySelector('#inlineSeriesDescription').value='';
+        createStatus.textContent='';
+        select.value=created.id;
+        await showSlots();
+        if(previewRun===created.id)status.textContent=`Created ${created.name}. Choose a volume to add this book.`;
+      }catch(error){createStatus.textContent=error.message;}
+      finally{fields.forEach(field=>{field.disabled=false;});}
+    });
+
     button.addEventListener('click', async () => {
       if (book.standalone) {
         status.textContent = 'Uncheck Mark as standalone and save the book before adding it to a series.';
