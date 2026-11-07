@@ -8,9 +8,8 @@
   const liveStyle = document.createElement('style');
   liveStyle.textContent = ".brand:after{content:'LIVE'!important;color:#2e5848!important}";
   document.head.appendChild(liveStyle);
-  const savedToken = sessionStorage.getItem('librarium-access');
-  const state = { token: savedToken && !['undefined', 'null'].includes(savedToken) ? savedToken : '', libraries: [], shelves: new Map(), loaded: false };
-  if (!state.token) sessionStorage.removeItem('librarium-access');
+  const session = window.LibrariumSession;
+  const state = { get token(){return session.access()}, libraries: [], shelves: new Map(), loaded: false };
   const seriesFilter = document.getElementById('noSeriesFilter');
   seriesFilter.addEventListener('click', () => {
     if (!state.loaded) return;
@@ -21,12 +20,12 @@
   });
   const accountAction = document.getElementById('accountAction');
   function updateAccountAction() {
-    accountAction.textContent = state.token ? 'Log out' : 'Log in';
+    accountAction.textContent = state.token || session.remembered() ? 'Log out' : 'Log in';
     accountAction.disabled = false;
   }
   accountAction.addEventListener('click', () => {
-    if (state.token) {
-      sessionStorage.removeItem('librarium-access');
+    if (state.token || session.remembered()) {
+      session.clear();
       window.location.reload();
       return;
     }
@@ -38,11 +37,9 @@
 
   async function api(path, options = {}) {
     const headers = { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers };
-    if (state.token) headers.Authorization = `Bearer ${state.token}`;
-    const response = await fetch(API + path, { ...options, headers });
+    const response = await session.request(API + path, { ...options, headers });
     if (response.status === 401) {
-      sessionStorage.removeItem('librarium-access');
-      state.token = '';
+      if (path !== '/auth/login') session.clear();
       state.loaded = false;
       state.libraries = [];
       if (path !== '/auth/login') loginScreen('Your session expired. Sign in again.');
@@ -81,10 +78,11 @@
     document.getElementById('subtitle').textContent = 'Sign in to the live Librarium catalogue. No demo records are used.';
     document.getElementById('content').innerHTML = `<div class="panel" style="max-width:520px;margin:35px auto">
       <div class="eyebrow">Live Librarium</div><h2 style="margin:8px 0 6px">Sign in</h2>
-      <p>Credentials are sent only to your own Librarium API. The access token is kept in this browser tab session.</p>
+      <p>Use your Librarium account to sign in.</p>
       ${message ? `<p role="alert" style="margin-top:18px;color:#aa4337">${esc(message)}</p>` : ''}
       <form id="liveLogin"><label for="liveIdentifier">Username or email</label><input id="liveIdentifier" name="identifier" autocomplete="username" required>
       <label for="livePassword">Password</label><input id="livePassword" name="password" type="password" autocomplete="current-password" required>
+      <label class="rememberOption"><input name="remember" type="checkbox"> Keep me signed in on this device</label>
       <div class="actions"><button class="primary">Sign in to live catalogue</button></div></form></div>`;
     document.getElementById('liveLogin').addEventListener('submit', login);
   }
@@ -94,11 +92,14 @@
     const form = event.currentTarget;
     const button = form.querySelector('button'); button.disabled = true; button.textContent = 'Signing in…';
     try {
-      const data = await api('/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+      const fields = new FormData(form), remember = fields.get('remember') === 'on';
+      fields.delete('remember');
+      const data = await api('/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(fields)) });
       if (typeof data?.access_token !== 'string' || !data.access_token) throw new Error('The login response did not include an access token.');
-      state.token = data.access_token; sessionStorage.setItem('librarium-access', state.token);
+      const remembered = session.signIn(data, remember);
       updateAccountAction();
       await loadLive();
+      if (remember && !remembered) toast('Signed in, but this browser could not remember the session.');
     } catch (error) { loginScreen(error.message); }
   }
 
@@ -165,11 +166,7 @@
         const path = img.dataset.libraryCover;
         const url = new URL(path, location.origin);
         if (url.origin !== location.origin || !url.pathname.startsWith('/api/')) return;
-        const response = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` },
-          redirect: 'error',
-          signal,
-        });
+        const response = await session.request(url.href, { signal });
         if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) return;
         const blob = await response.blob();
         if (signal.aborted || !img.isConnected) return;
@@ -212,7 +209,7 @@
     seriesRequest = Promise.allSettled(state.libraries.map(async lib =>
       requireList(await api(seriesPath(lib))).map(entry => ({ entry, lib }))
     )).then(results => {
-      if (!token || state.token !== token) return;
+      if (!token || !state.token) return;
       seriesLoading = false;
       failedSeries = results.filter(r => r.status === 'rejected').length;
       liveSeries = results.flatMap(r => r.status === 'fulfilled' ? r.value : [])
@@ -581,6 +578,6 @@
     if (book) await loadLive();
   };
 
-  if (state.token) loadLive().catch(error => loginScreen(error.message)); else loginScreen();
+  Promise.resolve().then(() => session.restore()).then(token => token ? loadLive() : loginScreen()).catch(error => loginScreen(error.message));
 })();
 
