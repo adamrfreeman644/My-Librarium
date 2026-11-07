@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Librarium Series Review</title>
+<style>*{box-sizing:border-box}body{max-width:760px;margin:auto;padding:20px;background:#f6f4ef;color:#253e36;font:16px system-ui}form,section{padding:16px;background:white;border:1px solid #d8ded3;border-radius:12px;margin:16px 0}label{display:block;margin-top:10px}input,select,button{font:inherit;padding:10px;border:1px solid #abb7ab;border-radius:8px;max-width:100%;min-height:44px}input:not([type=checkbox]),select{width:100%}input[type=checkbox]{min-height:0;margin-right:8px}button{background:#275343;color:white;margin-top:10px;cursor:pointer}button:disabled{opacity:.55}#candidates{max-height:240px;overflow:auto}article{border-top:1px solid #ddd;padding:12px 0;overflow-wrap:anywhere}</style>
+<p><a href="/">← Back to My Librarium</a></p><h1>Librarium Series Review</h1><p>Check your books against Hardcover. Librarium only receives changes you approve.</p>
+<nav id="pages" hidden><a href="#review-page">Series review</a> · <a href="#combine">Combine series</a></nav><div id="reviewPage"><section id="work" hidden><p>Find series for books that aren’t linked to one yet. Existing series are reused where possible.</p><label>Library <select id="library"></select></label><button id="logout">Log out</button> <button id="clearReview" type="button" hidden>Clear saved review</button></section>
+<section id="provider" hidden><h2>Check books with Hardcover</h2>
+<form id="hardcover"><label>Hardcover series URL <input name="series" type="url" required value="https://hardcover.app/series/skulduggery-pleasant"></label>
+<label>Hardcover API key <input name="key" type="password" autocomplete="off" required></label>
+<p><small>Get your key from <a href="https://hardcover.app/account/api" target="_blank" rel="noopener noreferrer">Hardcover API settings</a>. The key is used for this lookup and is not saved.</small></p>
+<button id="generate" type="submit" formnovalidate>Scan unlinked books in selected libraries</button> <button id="checkRun" type="submit">Check just this series</button></form></section><p id="status" role="status"></p><section id="review" hidden><h2>Review suggestions</h2><button id="exportReview" type="button" hidden>Download review</button><div id="results"></div></section></div><section id="combinePage" hidden>
+<h2>Combine series</h2>
+<p>Choose two series in the same library. Move the book links into the series you want to keep. The source series record stays in Librarium, along with its description and any provider volume list.</p>
+<label>Library <select id="combineLibrary"></select></label>
+<label>Series to keep <select id="combineTarget"></select></label>
+<label>Series to move books from <select id="combineSource"></select></label>
+<button id="previewCombine">Preview combination</button>
+<p id="combineStatus" role="status"></p><div id="combinePreview"></div>
+</section><script src="/series-review/review.js"></script><script src="/series-review/combine.js"></script></html>
