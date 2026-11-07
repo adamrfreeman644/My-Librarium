@@ -6,13 +6,13 @@ const key=s=>String(s??'').normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase()
 const valid=n=>Number.isFinite(n)&&n>0&&n<=1000;
 async function api(url,method='GET',data){
  const endpoint=url.startsWith('/api/')?url:'/series-assistant'+url;
- const r=await fetch(endpoint,{method,headers:{...(data?{'Content-Type':'application/json'}:{}),...(token?{Authorization:'Bearer '+token}:{})},...(data?{body:JSON.stringify(data)}:{})});
+ const r=await window.LibrariumSession.request(endpoint,{method,headers:{...(data?{'Content-Type':'application/json'}:{})},...(data?{body:JSON.stringify(data)}:{})});
  if(r.status===204)return null;
  const j=await r.json();if(!r.ok)throw Object.assign(Error(j.error||'Request failed.'),{status:r.status,retryAfter:j.retry_after,daily:j.daily});return j.data??j;
 }
 async function startSeriesReview(){
  try{
-  token=sessionStorage.getItem('librarium-access')||'';
+  token=await window.LibrariumSession.restore();
   if(!token)return status('Sign in to My Librarium first, then reopen Series Review from Settings.');
   const [account,available]=await Promise.all([api('/api/v1/auth/me'),api('/api/v1/libraries')]);
   const accountID=account?.id||account?.user?.id;
