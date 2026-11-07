@@ -28,7 +28,6 @@ async function startSeriesReview(){
   document.dispatchEvent(new Event('librarium-signed-in'));
  }catch(e){status(e.message);}
 }
-$('logout').onclick=()=>{sessionStorage.removeItem('librarium-access');location.assign('/');};
 window.addEventListener('DOMContentLoaded',startSeriesReview,{once:true});
 async function catalogue(base){
  const all=[];
@@ -384,7 +383,7 @@ async function scanHardcover(form){
   const aiFailures=await addExceptionNotes(reviewItems,unresolved);
   const persisted=persistReview();
   renderSavedReview(rev);
-  status(checked+' books checked · '+proposals+' series proposals · '+skipped+' books already in a series skipped · '+noSeries+' matched books without numbered series data'+(failures?' · '+failures+' lookup failures':'')+'. '+(stored&&persisted?'Review saved on this Mac.':'Download the review to keep a copy.')+(aiFailures?' Some Ollama notes could not be generated.':'')+' No library changes have been made automatically.');
+  status(checked+(checked===1?' book checked · ':' books checked · ')+proposals+(proposals===1?' series proposal':' series proposals')+' · '+skipped+' books already in a series skipped · '+noSeries+' matched books without numbered series data'+(failures?' · '+failures+' lookup failures':'')+'. '+(stored&&persisted?'Review saved in this browser.':'Download the review to keep a copy.')+(aiFailures?' Some Ollama notes could not be generated.':'')+' No library changes have been made automatically.');
 
  }catch(e){status(e.message+' Nothing has been saved.');}
  finally{button.disabled=single.disabled=picker.disabled=false;}
