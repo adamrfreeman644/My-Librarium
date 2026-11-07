@@ -63,6 +63,7 @@
 
   function loginScreen(message = '') {
     seriesFilter.hidden = true;
+    document.getElementById('seriesReviewLink').hidden = true;
     seriesFilter.setAttribute('aria-pressed','false');
     clearCovers();
     seriesRequest = null;
@@ -131,6 +132,7 @@
     books = (await Promise.all(state.libraries.map(allBooks))).flat();
     state.loaded = true;
     seriesFilter.hidden = false;
+    document.getElementById('seriesReviewLink').hidden = false;
     document.querySelector('.heading > button').disabled = !state.libraries.length;
     seriesData = [];
     localStorage.removeItem('lib-books-v1'); localStorage.removeItem('lib-series-v1');
