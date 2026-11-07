@@ -11,6 +11,14 @@
   const savedToken = sessionStorage.getItem('librarium-access');
   const state = { token: savedToken && !['undefined', 'null'].includes(savedToken) ? savedToken : '', libraries: [], shelves: new Map(), loaded: false };
   if (!state.token) sessionStorage.removeItem('librarium-access');
+  const seriesFilter = document.getElementById('noSeriesFilter');
+  seriesFilter.addEventListener('click', () => {
+    if (!state.loaded) return;
+    const active = seriesFilter.getAttribute('aria-pressed') === 'true';
+    seriesFilter.setAttribute('aria-pressed', String(!active));
+    if (!active) owner = 'Everyone';
+    setView('books');
+  });
   const accountAction = document.getElementById('accountAction');
   function updateAccountAction() {
     accountAction.textContent = state.token ? 'Log out' : 'Log in';
@@ -54,6 +62,8 @@
   }
 
   function loginScreen(message = '') {
+    seriesFilter.hidden = true;
+    seriesFilter.setAttribute('aria-pressed','false');
     clearCovers();
     seriesRequest = null;
     liveSeries = [];
@@ -120,6 +130,7 @@
     state.shelves = new Map(shelfSets);
     books = (await Promise.all(state.libraries.map(allBooks))).flat();
     state.loaded = true;
+    seriesFilter.hidden = false;
     document.querySelector('.heading > button').disabled = !state.libraries.length;
     seriesData = [];
     localStorage.removeItem('lib-books-v1'); localStorage.removeItem('lib-series-v1');
