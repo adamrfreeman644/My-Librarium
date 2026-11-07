@@ -158,7 +158,7 @@ $('hardcover').onsubmit=async event=>{
      if(v.matches.length!==1)continue;
      const b=v.matches[0];
      matchedTitles.add(key(v.book.title));
-     if(hasAffiliatedSeries(b))continue;
+     if(hasAffiliatedSeries(b)||markedStandalone(b))continue;
      if(!candidates.some(c=>c.id===b.id))candidates.push({id:b.id,title:b.title,position:Number(v.position)});
     }
     if(candidates.length)renderGroup(lib,runs,{name:run.name,reason:'Hardcover · matched by title and author',books:candidates},rev);
@@ -327,6 +327,7 @@ async function addExceptionNotes(items,unresolved){
  }
  return failures;
 }
+const markedStandalone=book=>Array.isArray(book.tags)&&book.tags.some(t=>String(t.name||'').trim().toLowerCase()==='standalone');
 function hasAffiliatedSeries(book){
  return Array.isArray(book.series)&&book.series.length>0;
 }
@@ -337,15 +338,17 @@ async function scanHardcover(form){
  const rev=++generation, button=$('generate'), single=$('checkRun'), picker=$('library');
  $('exportReview').hidden=true;
  button.disabled=single.disabled=picker.disabled=true;$('review').hidden=false;$('results').replaceChildren();
- let checked=0, skipped=0, noSeries=0, proposals=0, failures=0;
+ let checked=0, skipped=0, standalone=0, noSeries=0, proposals=0, failures=0;
  const unresolved=[], cache=new Map(), reviewItems=[];
  try{
   for(const lib of libraries.filter(x=>!picker.value||x.id===picker.value)){
    try{
     status('Reading '+lib.name+'…');
     const [runs,allBooks]=await Promise.all([api(root(lib.id)+'/series'),catalogue(root(lib.id))]);
-    const books=allBooks.filter(b=>!hasAffiliatedSeries(b));
-    skipped+=allBooks.length-books.length;
+    const unlinked=allBooks.filter(b=>!hasAffiliatedSeries(b));
+    skipped+=allBooks.length-unlinked.length;
+    const books=unlinked.filter(b=>!markedStandalone(b));
+    standalone+=unlinked.length-books.length;
     const groups=new Map();
     for(let i=0;i<books.length;i+=16){
      const batch=books.slice(i,i+16);
@@ -383,7 +386,7 @@ async function scanHardcover(form){
   const aiFailures=await addExceptionNotes(reviewItems,unresolved);
   const persisted=persistReview();
   renderSavedReview(rev);
-  status(checked+(checked===1?' book checked · ':' books checked · ')+proposals+(proposals===1?' series proposal':' series proposals')+' · '+skipped+' books already in a series skipped · '+noSeries+' matched books without numbered series data'+(failures?' · '+failures+' lookup failures':'')+'. '+(stored&&persisted?'Review saved in this browser.':'Download the review to keep a copy.')+(aiFailures?' Some Ollama notes could not be generated.':'')+' No library changes have been made automatically.');
+  status(checked+(checked===1?' book checked · ':' books checked · ')+proposals+(proposals===1?' series proposal':' series proposals')+' · '+skipped+' books already in a series skipped · '+standalone+' marked standalone skipped · '+noSeries+' matched books without numbered series data'+(failures?' · '+failures+' lookup failures':'')+'. '+(stored&&persisted?'Review saved in this browser.':'Download the review to keep a copy.')+(aiFailures?' Some Ollama notes could not be generated.':'')+' No library changes have been made automatically.');
 
  }catch(e){status(e.message+' Nothing has been saved.');}
  finally{button.disabled=single.disabled=picker.disabled=false;}
