@@ -34,6 +34,12 @@ function fingerprint(rows){
   const show=Boolean(token)&&location.hash==='#combine';
   section.hidden=!show;
   $('reviewPage').hidden=show;
+  $('pageHeading').textContent=show?'Combine series':'Series review';
+  $('pageIntro').textContent=show
+   ?'Bring overlapping series together without losing the books or their order.'
+   :'Find a place for the books that aren’t in a series yet. Check suggestions before adding them to your library.';
+  $('reviewTab').setAttribute('aria-current',show?'false':'page');
+  $('combineTab').setAttribute('aria-current',show?'page':'false');
  }
  addEventListener('hashchange',showPage);
  document.addEventListener('librarium-signed-in',()=>{
