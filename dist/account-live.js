@@ -10,13 +10,39 @@
   document.head.appendChild(liveStyle);
   const session = window.LibrariumSession;
   const state = { get token(){return session.access()}, libraries: [], shelves: new Map(), loaded: false };
-  const seriesFilter = document.getElementById('noSeriesFilter');
-  seriesFilter.addEventListener('click', () => {
+  const bookFilters = document.getElementById('bookFilters');
+  const filterBoxes = [...bookFilters.querySelectorAll('input[type=checkbox]')];
+  const filterCount = document.getElementById('bookFilterCount');
+  function updateBookFilters() {
+    const count = filterBoxes.filter(box => !box.checked).length;
+    filterCount.hidden = !count;
+    filterCount.textContent = String(count);
+  }
+  function showFilteredBooks() {
+    updateBookFilters();
     if (!state.loaded) return;
-    const active = seriesFilter.getAttribute('aria-pressed') === 'true';
-    seriesFilter.setAttribute('aria-pressed', String(!active));
-    if (!active) owner = 'Everyone';
+    if (view !== 'books') owner = 'Everyone';
     setView('books');
+  }
+  for (const box of filterBoxes) box.addEventListener('change', showFilteredBooks);
+  document.getElementById('noSeriesShortcut').addEventListener('click', () => {
+    filterBoxes.filter(box=>box.name==='seriesStatus').forEach(box=>{box.checked=box.value!=='linked';});
+    showFilteredBooks();
+    bookFilters.open=false;
+    bookFilters.querySelector('summary').focus();
+  });
+  document.getElementById('resetBookFilters').addEventListener('click', () => {
+    filterBoxes.forEach(box=>{box.checked=true;});
+    showFilteredBooks();
+  });
+  document.addEventListener('click', event => {
+    if (bookFilters.open && !bookFilters.contains(event.target)) bookFilters.open=false;
+  });
+  bookFilters.addEventListener('keydown', event => {
+    if (event.key==='Escape' && bookFilters.open) {
+      bookFilters.open=false;
+      bookFilters.querySelector('summary').focus();
+    }
   });
   const accountAction = document.getElementById('accountAction');
   function updateAccountAction() {
@@ -59,10 +85,12 @@
   }
 
   function loginScreen(message = '') {
-    seriesFilter.hidden = true;
+    bookFilters.hidden = true;
+    bookFilters.open = false;
+    filterBoxes.forEach(box=>{box.checked=true;});
+    updateBookFilters();
     document.getElementById('bookSortTools').hidden = true;
     document.getElementById('seriesReviewLink').hidden = true;
-    seriesFilter.setAttribute('aria-pressed','false');
     clearCovers();
     seriesRequest = null;
     liveSeries = [];
@@ -149,7 +177,7 @@
     state.shelves = new Map(shelfSets);
     books = (await Promise.all(state.libraries.map(allBooks))).flat();
     state.loaded = true;
-    seriesFilter.hidden = false;
+    bookFilters.hidden = false;
     document.getElementById('seriesReviewLink').hidden = false;
     document.querySelector('.heading > button').disabled = !state.libraries.length;
     seriesData = [];
