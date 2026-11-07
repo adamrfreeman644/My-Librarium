@@ -316,7 +316,7 @@
           + `${held && title ? `<span class="seriesVolumeTitle">${esc(title)}</span>` : ''}</div>`;
       }).join('')}</div>` : '<p>No volumes are listed for this series yet.</p>';
       panel.querySelectorAll('[data-series-book]').forEach(button => button.addEventListener('click', () =>
-        openBook(tiles[Number(button.dataset.seriesBook)].book_id)));
+        openBook(tiles[Number(button.dataset.seriesBook)].book_id,'',lib.id)));
       clearCovers();
       loadCovers();
     } catch {
@@ -349,25 +349,98 @@
     const thumbnail = showCover ? `<span class="unshelvedCover" aria-hidden="true">▤${b.cover
       ? `<img ${b.cover.startsWith('/api/') ? `data-library-cover="${esc(b.cover)}"` : `src="${esc(b.cover)}" loading="lazy"`}
         alt="" onerror="this.remove()">` : ''}</span>` : '';
-    return `<div class="rowbook" onclick="openBook(${esc(JSON.stringify(b.id))})">${showCover
+    return `<div class="rowbook" onclick="openBook(${esc(JSON.stringify(b.id))},'',${esc(JSON.stringify(b.libraryId))})">${showCover
       ? `<div class="unshelvedBook">${thumbnail}<div class="unshelvedBookText">${description}</div></div>`
       : `<div>${description}</div>`}<span>${esc(b.shelf || 'Assign shelf →')}</span></div>`;
   };
-  window.openBook = function (id = null, shelf = '') {
+  window.openBook = function (id = null, shelf = '', libraryId = '') {
     if (!state.loaded || !state.libraries.length) { toast('Sign in to a library first.'); return; }
-    const b = books.find(x => x.id === id);
+    const b = books.find(x => x.id === id && (!libraryId || x.libraryId === libraryId));
     const libs = state.libraries.map(l => `<option value="${l.id}" ${b?.libraryId === l.id || (!b && owner === l.name) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
     show(`<div class="eyebrow">Live Librarium record</div><h1 style="font-size:37px">${b ? 'Edit book' : 'Add book'}</h1>
-      <form id="bookForm" onsubmit="event.preventDefault();saveBook(${b ? `'${b.id}'` : 'null'})">
+      <form id="bookForm" data-library-id="${esc(b?.libraryId || '')}" onsubmit="event.preventDefault();saveBook(${b ? `'${b.id}'` : 'null'})">
       <label>Title</label><input name="title" required value="${esc(b?.title || '')}">
       <label>Author</label><input name="author" required value="${esc(b?.author || '')}">
       <label>Library</label><select name="libraryId" ${b ? 'disabled' : ''}>${libs}</select>
       ${b && state.libraries.length > 1 ? '<button id="moveBookButton" type="button" style="margin-top:8px">Move to another library</button>' : ''}
       <label>Physical shelf</label><select name="shelf">${shelfOptions(b?.shelf || shelf)}</select>
       <p style="font-size:11px;margin-top:8px">Shelf moves are written back to matching Librarium shelves such as A1–I8.</p>
-      <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
+      ${b ? `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
+        <legend>Add to existing series</legend>
+        <p class="bookSeriesMembership"></p>
+        <label for="editSeriesChoice">Series</label><select id="editSeriesChoice" disabled><option>Loading series…</option></select>
+        <label for="editSeriesVolume">Volume number</label><input id="editSeriesVolume" type="text" inputmode="decimal" disabled>
+        <button type="button" disabled>Add to series</button><p role="status"></p>
+      </fieldset>` : ''}
+      <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}','${b.libraryId}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
     document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
+    if (b) setupBookSeries(b);
   };
+
+  async function setupBookSeries(book) {
+    const panel = document.getElementById('bookSeriesEditor');
+    if (!panel) return;
+    const select = panel.querySelector('#editSeriesChoice');
+    const volume = panel.querySelector('#editSeriesVolume');
+    const button = panel.querySelector('button');
+    const status = panel.querySelector('[role=status]');
+    const membership = panel.querySelector('.bookSeriesMembership');
+    const base = seriesPath({id:book.libraryId});
+    const refsPath = `/libraries/${encodeURIComponent(book.libraryId)}/books/${encodeURIComponent(book.id)}/series`;
+    let runs = [], refs = [];
+    const refreshControls = () => {
+      const available = runs.filter(run => !refs.some(ref => ref.series_id === run.id));
+      select.replaceChildren(new Option('Choose a series', ''), ...available.map(run => new Option(run.name, run.id)));
+      select.disabled = volume.disabled = button.disabled = !available.length;
+      membership.textContent = refs.length
+        ? 'In series: ' + refs.map(ref => ref.series_name + (ref.position > 0 ? ` (vol. ${ref.position})` : '')).join(', ')
+        : 'This book is not linked to a series yet.';
+      return available.length;
+    };
+    try {
+      [runs, refs] = await Promise.all([api(base).then(requireList), api(refsPath).then(requireList)]);
+      if (!panel.isConnected || !modal.open) return;
+      runs.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+      status.textContent = refreshControls() ? '' : runs.length
+        ? 'This book is already linked to every series in this library.'
+        : 'This library has no saved series yet.';
+    } catch (error) {
+      status.textContent = 'Could not load series. ' + error.message;
+      return;
+    }
+    button.addEventListener('click', async () => {
+      const run = runs.find(item => item.id === select.value);
+      const position = Number(volume.value);
+      if (!run) { status.textContent = 'Choose an existing series.'; select.focus(); return; }
+      if (!Number.isFinite(position) || position <= 0 || position > 1000) {
+        status.textContent = 'Enter a volume number greater than 0 and no higher than 1000.';
+        volume.focus(); return;
+      }
+      select.disabled = volume.disabled = button.disabled = true;
+      status.textContent = 'Adding to series…';
+      try {
+        refs = requireList(await api(refsPath));
+        if (!refs.some(ref => ref.series_id === run.id)) {
+          await api(`${base}/${encodeURIComponent(run.id)}/books`, {
+            method:'POST', body:JSON.stringify({book_id:book.id,position}),
+          });
+          refs = requireList(await api(refsPath));
+          if (!refs.some(ref => ref.series_id === run.id)) throw new Error('Librarium did not confirm the link. Reopen Edit book to check.');
+          status.textContent = `Added to ${run.name}.`;
+        } else status.textContent = `This book is already in ${run.name}.`;
+        book.raw.series = refs;
+        seriesRequest = null;
+        liveSeries = [];
+        seriesLoading = false;
+        volume.value = '';
+        refreshControls();
+        render();
+      } catch (error) {
+        status.textContent = error.message;
+        select.disabled = volume.disabled = button.disabled = false;
+      }
+    });
+  }
 
   const bookCopies = async book =>
     requireList((await api(`/books/${encodeURIComponent(book.id)}/copies`))?.items);
@@ -464,7 +537,7 @@
       form.elements.allowExisting.required = hasExisting;
     }
     form.elements.destination.addEventListener('change', destinationChanged);
-    document.getElementById('cancelMoveBook').addEventListener('click', () => openBook(book.id));
+    document.getElementById('cancelMoveBook').addEventListener('click', () => openBook(book.id,'',book.libraryId));
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (moveInProgress) return;
@@ -548,7 +621,7 @@
     const form = document.getElementById('bookForm'); const data = Object.fromEntries(new FormData(form));
     try {
       if (id) {
-        const book = books.find(b => b.id === id);
+        const book = books.find(b => b.id === id && b.libraryId === form.dataset.libraryId);
         const raw = book.raw;
         const contributors = data.author.trim() === book.author ? raw.contributors : [
           ...(raw.contributors || []).filter(c => c.role && c.role !== 'author'),
@@ -567,8 +640,8 @@
     } catch (error) { toast(error.message); }
   };
 
-  window.confirmDelete = function (id) { const b = books.find(x => x.id === id); show(`<h2>Remove from ${esc(b.owner)}?</h2><p style="margin-top:15px">This retires that library’s copy of “${esc(b.title)}”.</p><div class="actions"><button onclick="openBook('${id}')">Cancel</button><button class="danger" onclick="deleteBook('${id}')">Remove copy</button></div>`); };
-  window.deleteBook = async function (id) { const b = books.find(x => x.id === id); try { await api(`/libraries/${b.libraryId}/books/${id}`, { method: 'DELETE' }); modal.close(); await loadLive(); } catch (error) { toast(error.message); } };
+  window.confirmDelete = function (id, lib = '') { const b = books.find(x => x.id === id && (!lib || x.libraryId === lib)); show(`<h2>Remove from ${esc(b.owner)}?</h2><p style="margin-top:15px">This retires that library’s copy of “${esc(b.title)}”.</p><div class="actions"><button onclick="openBook('${id}','','${b.libraryId}')">Cancel</button><button class="danger" onclick="deleteBook('${id}','${b.libraryId}')">Remove copy</button></div>`); };
+  window.deleteBook = async function (id, lib = '') { const b = books.find(x => x.id === id && (!lib || x.libraryId === lib)); try { await api(`/libraries/${b.libraryId}/books/${id}`, { method: 'DELETE' }); modal.close(); await loadLive(); } catch (error) { toast(error.message); } };
 
   const baseComplete = window.completeSortMove;
   window.completeSortMove = async function (id, checked) {
