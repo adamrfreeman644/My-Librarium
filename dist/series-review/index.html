@@ -1,17 +1,119 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Librarium Series Review</title>
-<style>*{box-sizing:border-box}body{max-width:760px;margin:auto;padding:20px;background:#f6f4ef;color:#253e36;font:16px system-ui}form,section{padding:16px;background:white;border:1px solid #d8ded3;border-radius:12px;margin:16px 0}label{display:block;margin-top:10px}input,select,button{font:inherit;padding:10px;border:1px solid #abb7ab;border-radius:8px;max-width:100%;min-height:44px}input:not([type=checkbox]),select{width:100%}input[type=checkbox]{min-height:0;margin-right:8px}button{background:#275343;color:white;margin-top:10px;cursor:pointer}button:disabled{opacity:.55}#candidates{max-height:240px;overflow:auto}article{border-top:1px solid #ddd;padding:12px 0;overflow-wrap:anywhere}</style>
-<p><a href="/">← Back to My Librarium</a></p><h1>Librarium Series Review</h1><p>Check your books against Hardcover. Librarium only receives changes you approve.</p>
-<nav id="pages" hidden><a href="#review-page">Series review</a> · <a href="#combine">Combine series</a></nav><div id="reviewPage"><section id="work" hidden><p>Find series for books that aren’t linked to one yet. Existing series are reused where possible.</p><label>Library <select id="library"></select></label><button id="logout">Log out</button> <button id="clearReview" type="button" hidden>Clear saved review</button></section>
-<section id="provider" hidden><h2>Check books with Hardcover</h2>
-<form id="hardcover"><label>Hardcover series URL <input name="series" type="url" required value="https://hardcover.app/series/skulduggery-pleasant"></label>
-<label>Hardcover API key <input name="key" type="password" autocomplete="off" required></label>
-<p><small>Get your key from <a href="https://hardcover.app/account/api" target="_blank" rel="noopener noreferrer">Hardcover API settings</a>. The key is used for this lookup and is not saved.</small></p>
-<button id="generate" type="submit" formnovalidate>Scan unlinked books in selected libraries</button> <button id="checkRun" type="submit">Check just this series</button></form></section><p id="status" role="status"></p><section id="review" hidden><h2>Review suggestions</h2><button id="exportReview" type="button" hidden>Download review</button><div id="results"></div></section></div><section id="combinePage" hidden>
-<h2>Combine series</h2>
-<p>Choose two series in the same library. Move the book links into the series you want to keep. The source series record stays in Librarium, along with its description and any provider volume list.</p>
-<label>Library <select id="combineLibrary"></select></label>
-<label>Series to keep <select id="combineTarget"></select></label>
-<label>Series to move books from <select id="combineSource"></select></label>
-<button id="previewCombine">Preview combination</button>
-<p id="combineStatus" role="status"></p><div id="combinePreview"></div>
-</section><script src="/series-review/review.js"></script><script src="/series-review/combine.js"></script></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Series tools · My Librarium</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Libre+Caslon+Display&display=swap');
+:root{--paper:#f6f4ef;--card:#fffefa;--ink:#253e36;--muted:#506458;--line:#d9ded2;--forest:#2e5848;--mist:#e9eee4;--display:"Libre Caslon Display",Georgia,serif}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.55 "DM Sans",system-ui,sans-serif;overflow-wrap:anywhere}
+a{color:var(--forest);text-underline-offset:3px}
+:focus-visible{outline:3px solid #926c29;outline-offset:3px}
+.shell{width:min(1060px,100%);margin:auto;padding:20px max(22px,env(safe-area-inset-right)) 56px max(22px,env(safe-area-inset-left))}
+.masthead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}
+.wordmark{font:30px/1 var(--display);color:var(--ink);text-decoration:none}
+.back{display:inline-flex;align-items:center;min-height:44px;font-size:14px;font-weight:600;text-decoration:none}
+.back:hover{text-decoration:underline}
+.hero{position:relative;isolation:isolate;overflow:hidden;background:#203f34;color:#fff8e9;border-radius:20px;padding:clamp(24px,5vw,52px);min-height:220px;display:flex;align-items:center}
+.hero-copy{max-width:600px;position:relative;z-index:1}
+.eyebrow{margin:0 0 7px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;font-weight:700;color:var(--muted)}
+.hero .eyebrow{color:#d4e2ca}
+h1,h2,h3,p{margin:0}
+h1,h2,h3{font-family:var(--display);font-weight:400;line-height:1.08}
+h1{font-size:clamp(44px,7vw,72px);letter-spacing:-.025em}
+h2{font-size:clamp(30px,4vw,40px)}
+h3{font-size:clamp(24px,3vw,31px)}
+.hero p:last-child{margin-top:12px;color:#e2eadc;max-width:47ch}
+.spines{position:absolute;right:5%;bottom:-9px;display:flex;align-items:end;gap:9px;opacity:.6;transform:rotate(-8deg);pointer-events:none}
+.spines i{display:block;width:32px;height:var(--height);border:1px solid #d5e1ce75;border-radius:5px 5px 0 0;background:linear-gradient(90deg,#fff0,#f1ebc72e);box-shadow:inset 5px 0 #0e2a2160}
+.spines i:after{content:"";display:block;margin:15px 7px;height:6px;border-block:1px solid #f4e6c4aa}
+.tabs{display:flex;gap:8px;margin:19px 0 16px;flex-wrap:wrap}
+.tabs a{display:inline-flex;align-items:center;justify-content:center;padding:9px 16px;min-height:44px;border:1px solid var(--line);border-radius:100px;text-decoration:none;font-weight:700;background:var(--card)}
+.tabs a[aria-current="page"]{background:var(--forest);border-color:var(--forest);color:#fff}
+.card{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:clamp(16px,3.2vw,30px);margin:16px 0}
+.card-head{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+.stack{display:grid;gap:14px;min-width:0}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.fields.three{grid-template-columns:repeat(3,minmax(0,1fr))}
+label{display:block;min-width:0;font-weight:600}
+input,select,button{font:inherit;min-width:0;max-width:100%;border:1px solid #aab8ac;border-radius:8px}
+input:not([type=checkbox]),select{display:block;width:100%;min-height:46px;padding:10px 11px;margin-top:5px;background:#fff;color:var(--ink)}
+input[type=checkbox]{width:18px;height:18px;flex:0 0 18px;accent-color:var(--forest);margin:2px 0 0}
+button{cursor:pointer;background:var(--forest);border-color:var(--forest);color:#fff;padding:9px 15px;min-height:44px;font-weight:700}
+button:hover:not(:disabled){background:#214a3b}
+button.secondary{background:var(--card);color:var(--forest);border-color:#aab8ac}
+button.secondary:hover:not(:disabled){background:var(--mist)}
+button:disabled{opacity:.58;cursor:default}
+.actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.hint{color:var(--muted);font-size:14px;line-height:1.5}
+#status,#combineStatus{margin:12px 0;color:var(--muted)}
+#status:not(:empty),#combineStatus:not(:empty){border-left:3px solid #6d8e75;padding:9px 12px;background:var(--mist);border-radius:0 7px 7px 0}
+#results{display:grid;gap:12px}
+#results article,#results section,#results details,#combinePreview{min-width:0;border:1px solid var(--line);border-radius:12px;padding:16px;background:#fafbf6}
+#combinePreview:empty{display:none}
+#results article,#results section,#combinePreview{display:grid;gap:10px;justify-items:start}
+#results article select,#combinePreview ul{width:100%}
+#results section{background:var(--mist)}
+#results section article{width:100%;background:var(--card)}
+#results ul,#combinePreview ul{margin:0;padding:0;list-style:none}
+#results li,#combinePreview li{padding:7px 0;border-bottom:1px solid var(--line)}
+#results li label,#combinePreview>label{display:flex;align-items:flex-start;gap:8px;min-height:32px}
+#results details summary{cursor:pointer;font-weight:700}
+#results p,#combinePreview p{color:var(--muted)}
+#results p[role=status]:empty{display:none}
+#combinePreview input[type=number]{max-width:130px}
+@media(max-width:720px){.spines{right:-10px;opacity:.19}.fields.three{grid-template-columns:1fr}.shell{padding-inline:max(14px,env(safe-area-inset-left)) max(14px,env(safe-area-inset-right))}}
+@media(max-width:520px){.fields{grid-template-columns:1fr}.hero{min-height:0}.wordmark{font-size:26px}.back{font-size:13px}.tabs a{flex:1}.actions button{flex:1 1 auto}}
+</style>
+</head>
+<body>
+<main class="shell">
+<header class="masthead"><a class="wordmark" href="/">▥ My Librarium</a><a class="back" href="/">← Back to library</a></header>
+<div class="hero">
+  <div class="hero-copy"><p class="eyebrow">Catalogue tools</p><h1 id="pageHeading">Series review</h1><p id="pageIntro">Find a place for the books that aren’t in a series yet. Check suggestions before adding them to your library.</p></div>
+  <div class="spines" aria-hidden="true"><i style="--height:112px"></i><i style="--height:148px"></i><i style="--height:126px"></i><i style="--height:166px"></i><i style="--height:106px"></i></div>
+</div>
+<nav id="pages" class="tabs" aria-label="Series tools" hidden><a id="reviewTab" href="#review-page" aria-current="page">Series review</a><a id="combineTab" href="#combine">Combine series</a></nav>
+<div id="reviewPage">
+  <section id="work" class="card" hidden>
+    <div class="card-head"><div><p class="eyebrow">01 · Scope</p><h2>Choose a library</h2></div><div class="actions"><button id="clearReview" class="secondary" type="button" hidden>Clear saved review</button></div></div>
+    <label for="library">Collection</label><select id="library"></select>
+  </section>
+  <section id="provider" class="card" hidden>
+    <div class="card-head"><div><p class="eyebrow">02 · Match</p><h2>Check with Hardcover</h2></div></div>
+    <form id="hardcover" class="stack">
+      <div class="fields">
+        <label>Hardcover API key<input name="key" type="password" autocomplete="off" required></label>
+        <label>Series URL <span class="hint">(for a single series)</span><input name="series" type="url" required value="https://hardcover.app/series/skulduggery-pleasant"></label>
+      </div>
+      <p class="hint">Get your key from <a href="https://hardcover.app/account/api" target="_blank" rel="noopener noreferrer">Hardcover API settings</a>. It isn’t saved. Ollama can add notes for uncertain matches when your MacBook is online.</p>
+      <div class="actions"><button id="generate" type="submit" formnovalidate>Scan unlinked books</button><button id="checkRun" class="secondary" type="submit">Check this series only</button></div>
+    </form>
+  </section>
+  <p id="status" role="status"></p>
+  <section id="review" class="card" hidden>
+    <div class="card-head"><div><p class="eyebrow">03 · Review</p><h2>Suggested changes</h2></div><button id="exportReview" class="secondary" type="button" hidden>Download review</button></div>
+    <div id="results"></div>
+  </section>
+</div>
+<section id="combinePage" class="card" hidden>
+  <div class="card-head"><div><p class="eyebrow">Two series · One library</p><h2>Choose what to keep</h2></div></div>
+  <div class="stack">
+    <p class="hint">Move book links into the series you want to keep. The original series record stays in Librarium, along with its description and provider volume list.</p>
+    <div class="fields three">
+      <label>Library<select id="combineLibrary"></select></label>
+      <label>Series to keep<select id="combineTarget"></select></label>
+      <label>Series to move books from<select id="combineSource"></select></label>
+    </div>
+    <div class="actions"><button id="previewCombine" type="button">Preview combination</button></div>
+  </div>
+  <p id="combineStatus" role="status"></p><div id="combinePreview"></div>
+</section>
+</main>
+<script src="/series-review/review.js?v=style-1" defer></script>
+<script src="/series-review/combine.js?v=style-1" defer></script>
+</body>
+</html>
