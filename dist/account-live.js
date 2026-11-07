@@ -63,6 +63,7 @@
 
   function loginScreen(message = '') {
     seriesFilter.hidden = true;
+    document.getElementById('bookSortTools').hidden = true;
     document.getElementById('seriesReviewLink').hidden = true;
     seriesFilter.setAttribute('aria-pressed','false');
     clearCovers();
