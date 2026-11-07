@@ -419,6 +419,7 @@
       ${b ? `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
         <legend>Add to existing series</legend>
         <p class="bookSeriesMembership"></p>
+        <div class="authorSeriesSuggestions" hidden><strong>Suggested by author</strong><div class="authorSeriesChoices"></div></div>
         <div class="bookSeriesFields">
           <label for="editSeriesChoice">Series<select id="editSeriesChoice" disabled><option>Loading series…</option></select></label>
           <label for="editSeriesVolume">Volume number<input id="editSeriesVolume" type="text" inputmode="decimal" disabled></label>
@@ -432,6 +433,25 @@
     if (b) setupBookSeries(b);
   };
 
+  function suggestSeriesByAuthor(book, available) {
+    const authors = item => (item.raw?.contributors || []).filter(c => !c.role || c.role === 'author');
+    const authorKey = name => String(name || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+    const ownAuthors = authors(book);
+    const allowed = new Set(available.map(run => run.id)), counts = new Map();
+    if (!ownAuthors.length) return [];
+    for (const other of books) {
+      if (other.libraryId !== book.libraryId || other.id === book.id) continue;
+      const sameAuthor = authors(other).some(a => ownAuthors.some(b =>
+        (a.contributor_id && b.contributor_id && a.contributor_id === b.contributor_id) ||
+        (authorKey(a.name) && authorKey(a.name) === authorKey(b.name))));
+      if (!sameAuthor) continue;
+      const refs = new Set((other.raw.series || []).map(ref => ref.series_id));
+      for (const id of refs) if (allowed.has(id)) counts.set(id,(counts.get(id)||0)+1);
+    }
+    return available.filter(run => counts.has(run.id)).sort((a,b) =>
+      counts.get(b.id)-counts.get(a.id) || String(a.name).localeCompare(String(b.name))).slice(0,4);
+  }
+
   async function setupBookSeries(book) {
     const panel = document.getElementById('bookSeriesEditor');
     if (!panel) return;
@@ -441,11 +461,15 @@
     const status = panel.querySelector('[role=status]');
     const membership = panel.querySelector('.bookSeriesMembership');
     const preview = panel.querySelector('.editSeriesPreview');
+    const suggestions = panel.querySelector('.authorSeriesSuggestions');
+    const choices = suggestions.querySelector('.authorSeriesChoices');
     const occupies = (rows, position) => rows.find(row => Number(row.position)>0 &&
       position >= Number(row.position) && position <= Math.max(Number(row.position),Number(row.position_end)||0));
     let previewRun = '';
     async function showSlots() {
       const run = runs.find(item => item.id === select.value);
+      for (const choice of choices.querySelectorAll('button'))
+        choice.setAttribute('aria-pressed',String(choice.dataset.series === select.value));
       previewRun = '';
       volume.value = '';
       volume.disabled = button.disabled = true;
@@ -506,6 +530,21 @@
     const refreshControls = () => {
       const available = runs.filter(run => !refs.some(ref => ref.series_id === run.id));
       select.replaceChildren(new Option('Choose a series', ''), ...available.map(run => new Option(run.name, run.id)));
+      const recommended = suggestSeriesByAuthor(book,available);
+      suggestions.hidden = !recommended.length;
+      choices.replaceChildren(...recommended.map(run=>{
+        const pick = document.createElement('button');
+        pick.type='button';
+        pick.dataset.series=run.id;
+        pick.textContent=run.name;
+        pick.setAttribute('aria-pressed','false');
+        pick.addEventListener('click',()=>{
+          if (select.disabled) return;
+          select.value=run.id;
+          showSlots();
+        });
+        return pick;
+      }));
       select.disabled = !available.length;
       volume.disabled = button.disabled = true;
       preview.hidden = true;
