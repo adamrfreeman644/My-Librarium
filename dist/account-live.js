@@ -369,6 +369,7 @@
         <legend>Add to existing series</legend>
         <p class="bookSeriesMembership"></p>
         <label for="editSeriesChoice">Series</label><select id="editSeriesChoice" disabled><option>Loading series…</option></select>
+        <div class="editSeriesPreview" hidden aria-live="polite"></div>
         <label for="editSeriesVolume">Volume number</label><input id="editSeriesVolume" type="text" inputmode="decimal" disabled>
         <button type="button" disabled>Add to series</button><p role="status"></p>
       </fieldset>` : ''}
@@ -385,13 +386,77 @@
     const button = panel.querySelector('button');
     const status = panel.querySelector('[role=status]');
     const membership = panel.querySelector('.bookSeriesMembership');
+    const preview = panel.querySelector('.editSeriesPreview');
+    const occupies = (rows, position) => rows.find(row => Number(row.position)>0 &&
+      position >= Number(row.position) && position <= Math.max(Number(row.position),Number(row.position_end)||0));
+    let previewRun = '';
+    async function showSlots() {
+      const run = runs.find(item => item.id === select.value);
+      previewRun = '';
+      volume.value = '';
+      volume.disabled = button.disabled = true;
+      status.textContent = '';
+      preview.hidden = !run;
+      preview.replaceChildren();
+      if (!run) return;
+      const requested = document.createElement('p');
+      requested.textContent = 'Loading books and open slots…';
+      preview.append(requested);
+      try {
+        const url = `${base}/${encodeURIComponent(run.id)}`;
+        const [linked, known] = await Promise.all([
+          api(url+'/books').then(requireList),
+          api(url+'/volumes').then(requireList).catch(() => []),
+        ]);
+        if (!panel.isConnected || !modal.open || !requested.isConnected || select.value !== run.id) return;
+        const slots = seriesTiles(linked,known,run.total_count);
+        const heading = document.createElement('strong');
+        heading.textContent = 'Books and open slots';
+        preview.replaceChildren(heading);
+        const summary = document.createElement('p');
+        summary.textContent = slots.length ? 'Tap an open slot, or enter a new volume number below.' : 'No numbered volumes are listed yet. Enter a volume number below.';
+        preview.append(summary);
+        const list = document.createElement('ul');
+        list.className = 'editSeriesSlots';
+        for (const slot of slots) {
+          const position = Number(slot.position), occupied = Boolean(slot.book_id) || Boolean(occupies(linked,position));
+          const item = document.createElement('li');
+          const number = position > 0 ? `Vol. ${position}${slot.position_end > position ? `–${slot.position_end}` : ''}` : 'Unnumbered';
+          const name = slot.title || (occupied ? 'Linked book' : 'Open slot');
+          if (!occupied && position>0 && position<=1000) {
+            const choice = document.createElement('button');
+            choice.type = 'button';
+            choice.textContent = `${number} · ${name}${slot.title?' · Open':''}`;
+            choice.addEventListener('click', () => {
+              volume.value = String(position);
+              for(const old of list.querySelectorAll('[aria-pressed=true]'))old.setAttribute('aria-pressed','false');
+              choice.setAttribute('aria-pressed','true');
+              status.textContent = `${number} selected.`;
+            });
+            choice.setAttribute('aria-pressed','false');
+            item.append(choice);
+          } else item.textContent = `${number} · ${name}${slot.held===false&&occupied?' · Linked, not owned':''}`;
+          list.append(item);
+        }
+        if (slots.length) preview.append(list);
+        previewRun = run.id;
+        volume.disabled = button.disabled = false;
+      } catch (error) {
+        if(requested.isConnected)requested.textContent = 'Could not load series slots. Choose the series again to retry.';
+      }
+    }
+    select.addEventListener('change',showSlots);
     const base = seriesPath({id:book.libraryId});
     const refsPath = `/libraries/${encodeURIComponent(book.libraryId)}/books/${encodeURIComponent(book.id)}/series`;
     let runs = [], refs = [];
     const refreshControls = () => {
       const available = runs.filter(run => !refs.some(ref => ref.series_id === run.id));
       select.replaceChildren(new Option('Choose a series', ''), ...available.map(run => new Option(run.name, run.id)));
-      select.disabled = volume.disabled = button.disabled = !available.length;
+      select.disabled = !available.length;
+      volume.disabled = button.disabled = true;
+      preview.hidden = true;
+      preview.replaceChildren();
+      previewRun = '';
       membership.textContent = refs.length
         ? 'In series: ' + refs.map(ref => ref.series_name + (ref.position > 0 ? ` (vol. ${ref.position})` : '')).join(', ')
         : 'This book is not linked to a series yet.';
@@ -411,7 +476,7 @@
     button.addEventListener('click', async () => {
       const run = runs.find(item => item.id === select.value);
       const position = Number(volume.value);
-      if (!run) { status.textContent = 'Choose an existing series.'; select.focus(); return; }
+      if (!run || previewRun !== run.id) { status.textContent = 'Choose a series and wait for its volume slots to load.'; select.focus(); return; }
       if (!Number.isFinite(position) || position <= 0 || position > 1000) {
         status.textContent = 'Enter a volume number greater than 0 and no higher than 1000.';
         volume.focus(); return;
@@ -421,6 +486,9 @@
       try {
         refs = requireList(await api(refsPath));
         if (!refs.some(ref => ref.series_id === run.id)) {
+          const current = requireList(await api(`${base}/${encodeURIComponent(run.id)}/books`));
+          const existing = occupies(current,position);
+          if (existing) throw new Error(`Volume ${position} is already linked to ${existing.title || 'another book'}. Choose an open slot.`);
           await api(`${base}/${encodeURIComponent(run.id)}/books`, {
             method:'POST', body:JSON.stringify({book_id:book.id,position}),
           });
