@@ -67,6 +67,18 @@ button:disabled{opacity:.58;cursor:default}
 #combinePreview input[type=number]{max-width:130px}
 @media(max-width:720px){.spines{right:-10px;opacity:.19}.fields.three{grid-template-columns:1fr}.shell{padding-inline:max(14px,env(safe-area-inset-left)) max(14px,env(safe-area-inset-right))}}
 @media(max-width:520px){.fields{grid-template-columns:1fr}.hero{min-height:0}.wordmark{font-size:26px}.back{font-size:13px}.tabs a{flex:1}.actions button{flex:1 1 auto}}
+
+:root{color-scheme:light}
+@media(prefers-color-scheme:dark){
+ :root{color-scheme:dark;--paper:#151c19;--card:#202a25;--ink:#edf1e9;--muted:#b4c3b8;--line:#405148;--forest:#315e4c;--mist:#293a30}
+ a,.back{color:#b0dbc0}
+ .hero{background:#203f34}
+ input:not([type=checkbox]),select{background:#28352e;color:var(--ink);border-color:#647c6e}
+ button.secondary,.tabs a{color:#dcefe2;border-color:#647c6e}
+ button.secondary:hover:not(:disabled),#results article,#results details,#combinePreview{background:#28352e}
+ .tabs a[aria-current="page"]{color:#fff}
+ :focus-visible{outline-color:#a8d7b8}
+}
 </style>
 </head>
 <body>
