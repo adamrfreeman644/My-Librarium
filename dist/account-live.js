@@ -103,12 +103,28 @@
     } catch (error) { loginScreen(error.message); }
   }
 
+  const isStandaloneTag = tag => String(tag?.name || '').trim().toLowerCase() === 'standalone';
+  async function standaloneTag(libraryId) {
+    const path = `/libraries/${encodeURIComponent(libraryId)}/tags`;
+    let tags = requireList(await api(path));
+    let tag = tags.find(isStandaloneTag);
+    if (!tag) {
+      try { tag = await api(path, {method:'POST',body:JSON.stringify({name:'Standalone',color:'#2e5848'})}); }
+      catch (error) {
+        tags = requireList(await api(path));
+        tag = tags.find(isStandaloneTag);
+        if (!tag) throw error;
+      }
+    }
+    if (!tag?.id) throw new Error('Librarium did not return a Standalone tag.');
+    return tag;
+  }
   const authorOf = b => (b.contributors || []).filter(c => !c.role || c.role === 'author').map(c => c.name).join(', ') || 'Unknown author';
   const shelfCode = b => (b.shelves || []).map(s => s.name).find(n => /^[A-I][1-8]$/i.test(n || ''))?.toUpperCase() || null;
   const normaliseBook = (b, lib) => ({
     id: b.id, libraryId: lib.id, title: b.title || 'Untitled', author: authorOf(b), owner: lib.name,
     shelf: shelfCode(b), shelfIds: (b.shelves || []).map(s => s.id), color: '#476451', cover: b.cover_url || '',
-    isbn: '', added: Date.parse(b.created_at || '') || Date.now(), raw: b
+    isbn: '', standalone:(b.tags || []).some(isStandaloneTag) && !(b.series || []).length, added: Date.parse(b.created_at || '') || Date.now(), raw: b
   });
 
   async function allBooks(lib) {
@@ -365,6 +381,8 @@
       ${b && state.libraries.length > 1 ? '<button id="moveBookButton" type="button" style="margin-top:8px">Move to another library</button>' : ''}
       <label>Physical shelf</label><select name="shelf">${shelfOptions(b?.shelf || shelf)}</select>
       <p style="font-size:11px;margin-top:8px">Shelf moves are written back to matching Librarium shelves such as A1–I8.</p>
+      ${b ? `<label class="standaloneOption"><input id="standaloneBook" name="standalone" type="checkbox" ${b.standalone?'checked':''} ${b.raw.series?.length?'disabled':''}> Mark as standalone</label>
+        <p class="standaloneHint">${b.raw.series?.length?'This book already belongs to a series.':'Save to Librarium to keep this label. Standalone books are skipped in Series Review.'}</p>` : ''}
       ${b ? `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
         <legend>Add to existing series</legend>
         <p class="bookSeriesMembership"></p>
@@ -474,6 +492,10 @@
       return;
     }
     button.addEventListener('click', async () => {
+      if (book.standalone) {
+        status.textContent = 'Uncheck Mark as standalone and save the book before adding it to a series.';
+        return;
+      }
       const run = runs.find(item => item.id === select.value);
       const position = Number(volume.value);
       if (!run || previewRun !== run.id) { status.textContent = 'Choose a series and wait for its volume slots to load.'; select.focus(); return; }
@@ -690,12 +712,22 @@
     try {
       if (id) {
         const book = books.find(b => b.id === id && b.libraryId === form.dataset.libraryId);
-        const raw = book.raw;
+        const marker = form.elements.standalone;
+        const changeMarker = marker && !marker.disabled && marker.checked !== book.standalone;
+        const bookPath = `/libraries/${encodeURIComponent(book.libraryId)}/books/${encodeURIComponent(id)}`;
+        const raw = changeMarker ? await api(bookPath) : book.raw;
+        const tags = raw.tags || [];
+        let tagIDs = tags.map(t=>t.id);
+        if (changeMarker) {
+          if (marker.checked && raw.series?.length) throw new Error('This book already belongs to a series.');
+          tagIDs = tags.filter(t=>!isStandaloneTag(t)).map(t=>t.id);
+          if (marker.checked) tagIDs.push((await standaloneTag(book.libraryId)).id);
+        }
         const contributors = data.author.trim() === book.author ? raw.contributors : [
           ...(raw.contributors || []).filter(c => c.role && c.role !== 'author'),
           { name: data.author.trim(), role: 'author' }
         ];
-        await api(`/libraries/${book.libraryId}/books/${id}`, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: (raw.genres || []).map(x => x.id), tag_ids: (raw.tags || []).map(x => x.id) }) });
+        await api(bookPath, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: (raw.genres || []).map(x => x.id), tag_ids: [...new Set(tagIDs)] }) });
         await setShelf(book, data.shelf);
       } else {
         const mediaTypes = await api('/media-types');
