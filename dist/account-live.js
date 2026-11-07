@@ -481,6 +481,8 @@
         <details class="inlineSeriesCreate">
           <summary>＋ New series</summary>
           <p>Create a series in ${esc(b.owner)}.</p>
+          <button id="suggestSeriesFromBook" type="button">Suggest series</button>
+          <div class="inlineSeriesSuggestion" hidden></div>
           <label for="inlineSeriesName">Series name</label><input id="inlineSeriesName" maxlength="160">
           <div class="newSeriesFields">
             <div><label for="inlineSeriesStatus">Status</label><select id="inlineSeriesStatus"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
@@ -642,6 +644,65 @@
     const createStatus = creator.querySelector('#inlineSeriesMessage');
     const nameField = creator.querySelector('#inlineSeriesName');
     const countField = creator.querySelector('#inlineSeriesCount');
+    const suggestButton = creator.querySelector('#suggestSeriesFromBook');
+    const aiSuggestion = creator.querySelector('.inlineSeriesSuggestion');
+    suggestButton.addEventListener('click', async()=>{
+      const form = document.getElementById('bookForm');
+      const title = form.elements.title.value.trim();
+      if(!title){createStatus.textContent='Enter a book title first.';return;}
+      suggestButton.disabled=true;
+      aiSuggestion.hidden=false;
+      aiSuggestion.textContent='Checking the book context with Ollama…';
+      const authorMatches=suggestSeriesByAuthor(book,runs);
+      const context={
+        title,author:form.elements.author.value.trim(),subtitle:book.raw.subtitle||'',
+        description:book.raw.description||'',isbn:book.raw.isbn_13||book.raw.isbn_10||'',
+        existing:[...new Set([...authorMatches,...runs.filter(run=>
+          seriesNameKey(run.name).length>=4&&seriesNameKey(title).includes(seriesNameKey(run.name)))
+        ].map(run=>run.name))],
+      };
+      try{
+        const known = (await Promise.all(authorMatches.map(async run=>{
+          try{
+            const volumes=requireList(await api(`${base}/${encodeURIComponent(run.id)}/volumes`));
+            return volumes.some(volume=>seriesNameKey(volume.title)===seriesNameKey(title))?run:null;
+          }catch{return null;}
+        }))).filter(Boolean);
+        let result, verified=false;
+        if(known.length===1){
+          result={name:known[0].name,reason:'This title is listed in the saved volume list.'};
+          verified=true;
+        }else{
+          const response=await session.request('/series-assistant/suggest-series',{
+            method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(context),
+          });
+          try{result=await response.json();}catch{throw Error('Series Assistant could not be reached. Check that your MacBook is online.');}
+          if(!response.ok)throw Error(result.error||'Could not get a series suggestion.');
+        }
+        if(!panel.isConnected||!modal.open)return;
+        aiSuggestion.replaceChildren();
+        const info=document.createElement('p');
+        const name=typeof result.name==='string'?result.name.trim():'';
+        if(!name){info.textContent='No confident suggestion. You can still enter a series name yourself.';aiSuggestion.append(info);return;}
+        info.textContent=(verified?'Saved volume list match: ':'Ollama suggestion (unverified): ')+name+(result.reason?' · '+result.reason:'');
+        aiSuggestion.append(info);
+        const matching=runs.filter(run=>seriesNameKey(run.name)===seriesNameKey(name));
+        if(matching.length>1){const note=document.createElement('p');note.textContent='More than one existing series has this name. Choose the right one in the dropdown.';aiSuggestion.append(note);return;}
+        if(matching.length===1&&refs.some(ref=>ref.series_id===matching[0].id)){
+          const note=document.createElement('p');note.textContent='This book is already linked to that series.';aiSuggestion.append(note);return;
+        }
+        const use=document.createElement('button');use.type='button';
+        use.textContent=matching.length?'Select existing series':'Use suggested name';
+        use.addEventListener('click',()=>{
+          if(matching.length){
+            if(![...select.options].some(option=>option.value===matching[0].id))return;
+            creator.open=false;select.value=matching[0].id;showSlots();
+          }else{nameField.value=name;nameField.focus();}
+        });
+        aiSuggestion.append(use);
+      }catch(error){aiSuggestion.textContent=error.message;}
+      finally{suggestButton.disabled=false;}
+    });
     creator.addEventListener('keydown', event=>{
       if(event.key==='Enter'&&event.target.tagName==='INPUT'){
         event.preventDefault();
@@ -671,6 +732,7 @@
         creator.open=false;
         nameField.value=countField.value=creator.querySelector('#inlineSeriesDescription').value='';
         createStatus.textContent='';
+        aiSuggestion.hidden=true;aiSuggestion.replaceChildren();
         select.value=created.id;
         await showSlots();
         if(previewRun===created.id)status.textContent=`Created ${created.name}. Choose a volume to add this book.`;
