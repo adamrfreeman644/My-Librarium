@@ -280,17 +280,70 @@
       (owner === 'Everyone' || owner === lib.name) &&
       [entry.name, entry.description, lib.name].join(' ').toLowerCase().includes(query)
     );
-    panel.innerHTML = `<div class="paneltop"><h2>Saved series</h2><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a></div>
+    panel.innerHTML = `<div class="paneltop"><h2>Saved series</h2><div class="seriesPageActions"><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a><button id="newSeriesButton" type="button" class="primary">＋ New series</button></div></div>
       ${failedSeries ? '<p role="status">Some collections’ series could not be loaded. <button id="retrySeries" type="button">Try again</button></p>' : ''}
       <div class="seriesgrid">${visible.map(({entry, lib}, index) => `<button class="seriescard" data-series-index="${index}">
         <div class="eyebrow">${esc(lib.name)}</div><h2>${esc(entry.name || 'Untitled series')}</h2>
         ${entry.book_count == null ? '' : `<p>${esc(String(entry.book_count))} linked books</p>`}
       </button>`).join('')}</div>
       ${!visible.length && !failedSeries ? '<div class="emptymsg">No saved series match this view.</div>' : ''}`;
+    panel.querySelector('#newSeriesButton')?.addEventListener('click',openNewSeries);
     panel.querySelector('#retrySeries')?.addEventListener('click', () => { seriesRequest = null; render(); });
     panel.querySelectorAll('[data-series-index]').forEach(button => button.addEventListener('click', () =>
       showLiveSeries(visible[Number(button.dataset.seriesIndex)])));
   };
+
+  function openNewSeries() {
+    const initial = state.libraries.find(lib=>lib.name===owner)?.id || '';
+    show(`<div class="eyebrow">Book series</div><h2>New series</h2>
+      <p>Create a series in Librarium. You can link books to it from Edit book.</p>
+      <form id="newSeriesForm">
+        <label for="newSeriesLibrary">Library</label>
+        <select id="newSeriesLibrary" name="library" required>
+          <option value="">Choose a library</option>
+          ${state.libraries.map(lib=>`<option value="${esc(lib.id)}" ${lib.id===initial||state.libraries.length===1?'selected':''}>${esc(lib.name)}</option>`).join('')}
+        </select>
+        <label for="newSeriesName">Series name</label>
+        <input id="newSeriesName" name="name" maxlength="160" required>
+        <div class="newSeriesFields">
+          <div><label for="newSeriesStatus">Status</label><select id="newSeriesStatus" name="status"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
+          <div><label for="newSeriesCount">Total volumes (optional)</label><input id="newSeriesCount" name="count" type="number" min="1" max="1000" step="1"></div>
+        </div>
+        <label for="newSeriesDescription">Description (optional)</label>
+        <textarea id="newSeriesDescription" name="description" rows="2" maxlength="2000"></textarea>
+        <p id="newSeriesStatusMessage" role="status"></p>
+        <div class="actions"><button type="button" onclick="modal.close()">Cancel</button><button type="submit" class="primary">Create series</button></div>
+      </form>`);
+    const form=document.getElementById('newSeriesForm');
+    const status=document.getElementById('newSeriesStatusMessage');
+    const controls=[...form.querySelectorAll('button,input,select,textarea'),modal.querySelector('.dialogClose')];
+    const key=name=>String(name||'').normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase();
+    let busy=false;
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();
+      if(busy)return;
+      const fields=Object.fromEntries(new FormData(form));
+      const lib=state.libraries.find(l=>l.id===fields.library), name=fields.name.trim().replace(/\s+/g,' ');
+      if(!lib||!name){status.textContent='Choose a library and enter a series name.';return;}
+      const payload={name,status:fields.status,description:fields.description.trim()};
+      if(fields.count)payload.total_count=Number(fields.count);
+      busy=true;controls.forEach(control=>{control.disabled=true;});status.textContent='Creating series…';
+      try{
+        const base=seriesPath(lib);
+        const existing=requireList(await api(base));
+        if(existing.some(run=>key(run.name)===key(name)))throw Error('A series with this name already exists in '+lib.name+'.');
+        const created=await api(base,{method:'POST',body:JSON.stringify(payload)});
+        if(!created?.id)throw Error('Librarium did not confirm creation. Check the series list before retrying.');
+        liveSeries=[...liveSeries,{entry:created,lib}].sort((a,b)=>String(a.entry.name).localeCompare(String(b.entry.name)));
+        if(modal.open&&form.isConnected)modal.close();
+        owner=lib.name;
+        document.getElementById('search').value='';
+        render();
+        toast('Created '+created.name+' in '+lib.name);
+      }catch(error){status.textContent=error.message;}
+      finally{busy=false;controls.forEach(control=>{control.disabled=false;});}
+    });
+  }
 
   function seriesTiles(linked, known, total) {
     const positions = new Map();
