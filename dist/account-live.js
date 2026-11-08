@@ -503,11 +503,11 @@
         <div class="newBookSeriesBody">${b ? bookSeriesFields(b.owner) : ''}</div>
       </details>
       </div>
-      ${b ? '' : newBookExtraFields()}
+      ${b ? `<details class="newBookSection"><summary>Genres</summary><div class="newBookClassifications">${genrePickerFields()}</div></details>` : newBookExtraFields()}
       <p id="bookSaveStatus" role="status"></p>
       <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}','${b.libraryId}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
     document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
-    if (b) setupBookSeries(b);
+    if (b) {setupBookSeries(b);setupEditBookGenres(b);}
     else {const form=document.getElementById('bookForm');loadBookMediaTypes(form);setupNewBookFields(form);setupNewBookSeries(form);}
   };
 
@@ -548,10 +548,13 @@
       </fieldset>`;
   }
 
+  function genrePickerFields(){
+    return `<fieldset><legend>Genres</legend><input id="newBookGenresSearch" type="search" placeholder="Search genres" aria-label="Search genres"><div id="newBookGenres" class="bookCheckList searchableChecks">Loading genres…</div><p id="newBookGenresCount" class="pickerCount" role="status"></p><button id="newBookGenresMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>`;
+  }
   function newBookExtraFields() {
     return `<details class="newBookSection" open><summary>Genres and tags</summary>
       <div class="newBookClassifications">
-        <fieldset><legend>Genres</legend><input id="newBookGenresSearch" type="search" placeholder="Search genres" aria-label="Search genres"><div id="newBookGenres" class="bookCheckList searchableChecks">Loading genres…</div><p id="newBookGenresCount" class="pickerCount" role="status"></p><button id="newBookGenresMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>
+        ${genrePickerFields()}
         <fieldset><legend>Tags</legend><div id="newBookTags" class="bookCheckList">Loading tags…</div>
           <label>New tag (optional)<input name="newTag" maxlength="80"></label></fieldset>
       </div>
@@ -603,46 +606,68 @@
       narrator:audio?data.narrator.trim()||null:null,is_primary:data.primaryEdition==='on'};
   }
 
+  function renderChecks(container,rows,name,selected=new Set()){
+    container.replaceChildren();
+    if(!rows.length){container.textContent='None available.';return;}
+    for(const row of rows){
+      if(!row?.id||!row.name)continue;
+      const label=document.createElement('label'),check=document.createElement('input');
+      check.type='checkbox';check.name=name;check.value=row.id;check.checked=selected.has(row.id);
+      label.append(check,document.createTextNode(row.name));container.append(label);
+    }
+  }
+  function searchablePicker(container){
+    const form=container.closest('form');
+    const search=form.querySelector('#'+container.id+'Search'), more=form.querySelector('#'+container.id+'More');
+    const count=form.querySelector('#'+container.id+'Count');
+    let limit=8;
+    function update(){
+      const q=search.value.trim().toLowerCase();
+      const labels=[...container.querySelectorAll('label')];
+      let matching=0;
+      for(const label of labels){
+        const matches=label.textContent.toLowerCase().includes(q);
+        label.hidden=!matches||(matching++>=limit);
+      }
+      const shown=Math.min(matching,limit), remaining=matching-shown;
+      const checked=labels.filter(label=>label.querySelector('input').checked).length;
+      count.textContent=labels.length?(matching?shown+' of '+matching+' shown':'No matches')+' · '+checked+' selected':'';
+      more.hidden=!remaining;
+      more.textContent=remaining?'Show more ('+remaining+' left)':'Show more';
+    }
+    search.addEventListener('input',()=>{limit=8;update();});
+    search.addEventListener('keydown',event=>{if(event.key==='Enter')event.preventDefault();});
+    container.addEventListener('change',update);
+    more.addEventListener('click',()=>{limit+=12;update();});
+    return update;
+  }
+
+  function setupEditBookGenres(book){
+    const box=document.getElementById('newBookGenres');
+    const form=box.closest('form'), section=box.closest('details');
+    const update=searchablePicker(box);
+    let loaded=false,loading=false;
+    section.addEventListener('toggle',async()=>{
+      if(!section.open||loaded||loading)return;
+      loading=true;box.textContent='Loading genres…';
+      try{
+        const all=requireList(await api('/genres'));
+        const existing=book.raw.genres||[];
+        const options=[...new Map([...all,...existing].map(item=>[item.id,item])).values()];
+        if(!form.isConnected)return;
+        renderChecks(box,options,'genreId',new Set(existing.map(item=>item.id)));
+        form.dataset.editGenresLoaded='true';
+        loaded=true;update();
+      }catch{box.textContent='Could not load genres. Reopen this section to retry.';}
+      finally{loading=false;}
+    });
+  }
   function setupNewBookFields(form) {
     const input=form.querySelector('#newBookLookup'),status=form.querySelector('#newBookLookupStatus'),results=form.querySelector('#newBookLookupResults');
     const genreBox=form.querySelector('#newBookGenres'),tagBox=form.querySelector('#newBookTags');
     const edition=form.querySelector('#newBookEdition');
     const contributorRows=form.querySelector('#newBookContributors');
     let tagsRevision=0,lookupRevision=0,genres=[];
-    function renderChecks(container,rows,name){
-      container.replaceChildren();
-      if(!rows.length){container.textContent='None available.';return;}
-      for(const row of rows){
-        if(!row?.id||!row.name)continue;
-        const label=document.createElement('label'),check=document.createElement('input');
-        check.type='checkbox';check.name=name;check.value=row.id;
-        label.append(check,document.createTextNode(row.name));container.append(label);
-      }
-    }
-    function searchablePicker(container){
-      const search=form.querySelector('#'+container.id+'Search'), more=form.querySelector('#'+container.id+'More');
-      const count=form.querySelector('#'+container.id+'Count');
-      let limit=8;
-      function update(){
-        const q=search.value.trim().toLowerCase();
-        const labels=[...container.querySelectorAll('label')];
-        let matching=0;
-        for(const label of labels){
-          const matches=label.textContent.toLowerCase().includes(q);
-          label.hidden=!matches||(matching++>=limit);
-        }
-        const shown=Math.min(matching,limit), remaining=matching-shown;
-        const checked=labels.filter(label=>label.querySelector('input').checked).length;
-        count.textContent=labels.length?(matching?shown+' of '+matching+' shown':'No matches')+' · '+checked+' selected':'';
-        more.hidden=!remaining;
-        more.textContent=remaining?'Show more ('+remaining+' left)':'Show more';
-      }
-      search.addEventListener('input',()=>{limit=8;update();});
-      search.addEventListener('keydown',event=>{if(event.key==='Enter')event.preventDefault();});
-      container.addEventListener('change',update);
-      more.addEventListener('click',()=>{limit+=12;update();});
-      return update;
-    }
     const updateGenres=searchablePicker(genreBox);
     api('/genres').then(value=>{genres=requireList(value);if(form.isConnected){renderChecks(genreBox,genres,'genreId');updateGenres();}})
       .catch(()=>{if(form.isConnected)genreBox.textContent='Could not load genres.';});
@@ -1260,7 +1285,9 @@
         const changeMarker = marker && !marker.disabled && marker.checked !== book.standalone;
         const bookPath = `/libraries/${encodeURIComponent(book.libraryId)}/books/${encodeURIComponent(id)}`;
         const changeAudience=data.shelfAudience!==bookAudienceTag(book.raw.tags);
-        const raw = changeMarker||changeAudience ? await api(bookPath) : book.raw;
+        const changeGenres=form.dataset.editGenresLoaded==='true'&&
+          [...fields.getAll('genreId')].sort().join()!==(book.raw.genres||[]).map(genre=>genre.id).sort().join();
+        const raw = changeMarker||changeAudience||changeGenres ? await api(bookPath) : book.raw;
         const tags = raw.tags || [];
         let tagIDs = tags.map(t=>t.id);
         if (changeMarker) {
@@ -1277,7 +1304,7 @@
           ...(raw.contributors || []).filter(c => c.role && c.role !== 'author'),
           await resolveAuthor(data.author)
         ];
-        await api(bookPath, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: (raw.genres || []).map(x => x.id), tag_ids: [...new Set(tagIDs)] }) });
+        await api(bookPath, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: changeGenres?fields.getAll('genreId'):(raw.genres || []).map(x => x.id), tag_ids: [...new Set(tagIDs)] }) });
         await setShelf(book, data.shelf);
       } else {
         const lib = state.libraries.find(l => l.id === data.libraryId);
@@ -1420,6 +1447,7 @@
 
   function makeShelfGroups(catalogue,runs,metadata){
     const byRun=new Map(runs.map(run=>[run.id,run])), groups=new Map(), review=[];
+    const flag=(group,reason)=>review.push({name:group.name,reason,run:group.run,book:group.members[0].book});
     const audienceNames=book=>[...(book.raw.genres||[]),...(book.raw.tags||[])].map(item=>item.name||item);
     for(const book of catalogue){
       const memberships=(book.raw.series||[]).filter(ref=>byRun.has(ref.series_id));
@@ -1438,9 +1466,9 @@
     for(const group of groups.values()){
       const {run,members}=group;
       group.name=run?.name||members[0].book.title;
-      if(group.conflict){review.push(group.name+': overlapping series memberships');continue;}
+      if(group.conflict){flag(group,'overlapping series memberships');continue;}
       if(run&&members.length>1&&members.some(item=>!(item.position>0))){
-        review.push(group.name+': missing volume numbers');continue;
+        flag(group,'missing volume numbers');continue;
       }
       members.sort((a,b)=>(a.position||0)-(b.position||0)||a.book.title.localeCompare(b.book.title));
       const counts=new Map();
@@ -1456,7 +1484,7 @@
       }).filter(x=>x!==null));
       group.audience=shelfAudience(run?.demographic)??(audiences.size===1?[...audiences][0]:null);
       if(!group.genre||group.audience===null){
-        review.push(group.name+': set '+(!group.genre&&group.audience===null?'genre and audience':!group.genre?'a genre':'YA or Adult'));continue;
+        flag(group,'set '+(!group.genre&&group.audience===null?'genre and audience':!group.genre?'a genre':'YA or Adult'));continue;
       }
       group.authors=new Set(members.flatMap(({book})=>[...shelfAuthors(book)]));
       group.meta=metadata[run?.id]||{};
@@ -1475,10 +1503,10 @@
         const custom=peers.every(peer=>peer.meta.order>0);
         const rank=peer=>custom?peer.meta.order:Number(peer.run?.publication_year);
         if(new Set(peers.map(rank)).size!==peers.length||peers.some(peer=>!(rank(peer)>0))){
-          review.push(group.meta.universe+': set a series order or distinct publication years');continue;
+          peers.forEach(peer=>flag(peer,'set a series order or distinct publication years for '+group.meta.universe));continue;
         }
         if(peers.some(peer=>peer.genre!==group.genre||peer.audience!==group.audience)){
-          review.push(group.meta.universe+': its series need the same shelf genre and audience to stay in order');continue;
+          peers.forEach(peer=>flag(peer,'use the same shelf genre and audience for '+group.meta.universe));continue;
         }
         peers.sort((a,b)=>rank(a)-rank(b));
       }
@@ -1493,7 +1521,7 @@
     const indexByCode=new Map(slots.map(slot=>[slot.code,slot.index]));
     const adjacency=(a,b)=>a.row===b.row&&b.column===a.column+1&&a.column!==4;
     const layouts=new Map(), steps=[];
-    const note=(block,reason)=>review.push(block.name+': '+reason);
+    const note=(block,reason)=>review.push({name:block.name,reason});
     const reserve=(slot,block)=>{slot.genre=block.genre;slot.low=Math.min(slot.low,block.audience);slot.high=Math.max(slot.high,block.audience);};
     const claimed=new Set(blocks.flatMap(block=>block.members.map(member=>member.book.id)));
     for(const book of catalogue){
@@ -1619,7 +1647,13 @@
           '<p>No move is ready. Check the reading order and review items below.</p>'}
         ${initial&&remaining.length?`<details class="newBookSection"><summary>Preview all proposed moves</summary><ol>${remaining.map(item=>`<li>${esc(item.book.title)} → ${esc(item.to)}</li>`).join('')}</ol></details>`:''}
         ${initial&&plan.layouts.size?`<details class="newBookSection"><summary>Reading order on each shelf</summary>${[...plan.layouts].map(([code,titles])=>`<h3>Shelf ${esc(code)}</h3><ol>${titles.map(book=>`<li>${esc(book.title)}</li>`).join('')}</ol>`).join('')}</details>`:''}
-        ${plan.review.length?`<details class="newBookSection" ${!step?'open':''}><summary>Needs review (${plan.review.length})</summary><ul>${plan.review.map(reason=>`<li>${esc(reason)}</li>`).join('')}</ul></details>`:''}`;
+        ${plan.review.length?`<details class="newBookSection" ${!step?'open':''}><summary>Needs review (${plan.review.length})</summary><ul>${plan.review.map((item,index)=>`<li><strong>${esc(item.name)}</strong>: ${esc(item.reason)} ${item.run||item.book?`<button type="button" data-review-item="${index}">${item.run?'Edit series shelving':'Edit book'}</button>`:''}</li>`).join('')}</ul></details>`:''}`;
+      panel.querySelectorAll('[data-review-item]').forEach(button=>button.onclick=()=>{
+        if(busy)return;
+        const item=plan.review[Number(button.dataset.reviewItem)];
+        if(item.run)editSeriesShelving(item.run,lib);
+        else if(item.book)openBook(item.book.id,'',lib.id);
+      });
       panel.querySelector('[data-full]')?.addEventListener('click',()=>{
         prefs.value.capacity[step.to]=getCount(step.to);
         prefs.save(); displayCapacity();
