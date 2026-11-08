@@ -478,31 +478,9 @@
         ${b ? `<label class="standaloneOption"><input id="standaloneBook" name="standalone" type="checkbox" ${b.standalone?'checked':''} ${b.raw.series?.length?'disabled':''}> Mark as standalone</label>
           <p class="standaloneHint">${b.raw.series?.length?'This book already belongs to a series.':'Standalone books are skipped in Series Review.'}</p>` : ''}
       </div>
-      ${b ? `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
-        <legend>Add to existing series</legend>
-        <p class="bookSeriesMembership"></p>
-        <details class="inlineSeriesCreate">
-          <summary>＋ New series</summary>
-          <p>Create a series in ${esc(b.owner)}.</p>
-          <button id="suggestSeriesFromBook" type="button">Suggest series</button>
-          <div class="inlineSeriesSuggestion" hidden></div>
-          <label for="inlineSeriesName">Series name</label><input id="inlineSeriesName" maxlength="160">
-          <div class="newSeriesFields">
-            <div><label for="inlineSeriesStatus">Status</label><select id="inlineSeriesStatus"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
-            <div><label for="inlineSeriesCount">Total volumes (optional)</label><input id="inlineSeriesCount" inputmode="numeric"></div>
-          </div>
-          <label for="inlineSeriesDescription">Description (optional)</label><textarea id="inlineSeriesDescription" rows="2" maxlength="2000"></textarea>
-          <button id="inlineSeriesSave" type="button" class="primary">Create series</button>
-          <p id="inlineSeriesMessage" role="status"></p>
-        </details>
-        <div class="authorSeriesSuggestions" hidden><strong>Suggested by author</strong><div class="authorSeriesChoices"></div></div>
-        <div class="bookSeriesFields">
-          <label for="editSeriesChoice">Series<select id="editSeriesChoice" disabled><option>Loading series…</option></select></label>
-          <label for="editSeriesVolume">Volume number<input id="editSeriesVolume" type="text" inputmode="decimal" disabled></label>
-        </div>
-        <div class="editSeriesPreview" hidden aria-live="polite"></div>
-        <button id="addBookToSeries" type="button" disabled>Add to series</button><p id="editSeriesMessage" role="status"></p>
-      </fieldset>` : ''}
+      <details class="newBookSection bookSeriesSection" id="newBookSeries" ${b ? 'open' : ''}><summary>Series</summary>
+        <div class="newBookSeriesBody">${b ? bookSeriesFields(b.owner) : ''}</div>
+      </details>
       </div>
       ${b ? '' : newBookExtraFields()}
       <p id="bookSaveStatus" role="status"></p>
@@ -520,12 +498,36 @@
       <p id="newBookLookupStatus" role="status"></p><div id="newBookLookupResults"></div>
     </section>`;
   }
+  function bookSeriesFields(ownerName,pending=false){
+    return `<fieldset id="bookSeriesEditor" class="bookSeriesEditor">
+        <legend>Add to existing series</legend>
+        <p class="bookSeriesMembership"></p>
+        <details class="inlineSeriesCreate">
+          <summary>＋ New series</summary>
+          <p>Create a series in ${esc(ownerName)}.</p>
+          <button id="suggestSeriesFromBook" type="button">Suggest series</button>
+          <div class="inlineSeriesSuggestion" hidden></div>
+          <label for="inlineSeriesName">Series name</label><input id="inlineSeriesName" maxlength="160">
+          <div class="newSeriesFields">
+            <div><label for="inlineSeriesStatus">Status</label><select id="inlineSeriesStatus"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
+            <div><label for="inlineSeriesCount">Total volumes (optional)</label><input id="inlineSeriesCount" inputmode="numeric"></div>
+          </div>
+          <label for="inlineSeriesDescription">Description (optional)</label><textarea id="inlineSeriesDescription" rows="2" maxlength="2000"></textarea>
+          <button id="inlineSeriesSave" type="button" class="primary">Create series</button>
+          <p id="inlineSeriesMessage" role="status"></p>
+        </details>
+        <div class="authorSeriesSuggestions" hidden><strong>Suggested by author</strong><div class="authorSeriesChoices"></div></div>
+        <div class="bookSeriesFields">
+          <label for="editSeriesChoice">Series<select id="editSeriesChoice" name="seriesId" disabled><option>Loading series…</option></select></label>
+          <label for="editSeriesVolume">Volume number<input id="editSeriesVolume" name="seriesPosition" type="text" inputmode="decimal" disabled></label>
+        </div>
+        <div class="editSeriesPreview" hidden aria-live="polite"></div>
+        <button id="addBookToSeries" ${pending ? 'hidden style="display:none"' : ''} type="button" disabled>Add to series</button><p id="editSeriesMessage" role="status"></p>
+      </fieldset>`;
+  }
+
   function newBookExtraFields() {
-    return `<details class="newBookSection" id="newBookSeries"><summary>Series (optional)</summary>
-      <div class="bookSeriesFields"><label>Series<select name="seriesId"><option value="">No series</option></select></label>
-      <label>Volume number<input name="seriesPosition" type="number" min="0" max="1000" step="any" list="newBookOpenVolumes" disabled></label></div>
-      <datalist id="newBookOpenVolumes"></datalist><p id="newBookSeriesStatus" role="status"></p>
-    </details><details class="newBookSection" open><summary>Genres and tags</summary>
+    return `<details class="newBookSection" open><summary>Genres and tags</summary>
       <div class="newBookClassifications">
         <fieldset><legend>Genres</legend><input id="newBookGenresSearch" type="search" placeholder="Search genres" aria-label="Search genres"><div id="newBookGenres" class="bookCheckList searchableChecks">Loading genres…</div><p id="newBookGenresCount" class="pickerCount" role="status"></p><button id="newBookGenresMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>
         <fieldset><legend>Tags</legend><div id="newBookTags" class="bookCheckList">Loading tags…</div>
@@ -740,50 +742,31 @@
   }
 
   function setupNewBookSeries(form){
-    const section=form.querySelector('#newBookSeries'), select=form.elements.seriesId;
-    const library=form.elements.libraryId, volume=form.elements.seriesPosition;
-    const status=section.querySelector('[role=status]'), slots=section.querySelector('datalist');
-    let revision=0, loadedLibrary='', runs=[];
-    const path=()=>seriesPath({id:library.value});
-    async function load(){
-      const request=++revision, lib=library.value;
-      loadedLibrary=''; runs=[]; volume.value=''; volume.disabled=true;
-      slots.replaceChildren(); select.replaceChildren(new Option('No series',''));
-      select.disabled=true; status.textContent='';
-      if(!section.open)return;
-      status.textContent='Loading series…';
-      try{
-        const results=requireList(await api(path()));
-        if(request!==revision||!form.isConnected)return;
-        runs=results.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-        select.append(...runs.map(run=>new Option(run.name,run.id)));
-        loadedLibrary=lib; select.disabled=false;
-        status.textContent=runs.length?'':'This library has no saved series yet.';
-      }catch{if(request===revision)status.textContent='Could not load series. Reopen this section to retry.';}
+    const section=form.querySelector('#newBookSeries'), body=section.querySelector('.newBookSeriesBody');
+    let loadedLibrary='';
+    function load(){
+      const lib=state.libraries.find(item=>item.id===form.elements.libraryId.value);
+      body.replaceChildren();
+      loadedLibrary='';
+      if(!section.open||!lib)return;
+      body.innerHTML=bookSeriesFields(lib.name,true);
+      loadedLibrary=lib.id;
+      setupBookSeries({
+        libraryId:lib.id,
+        get author(){return form.elements.author.value.trim();},
+        get raw(){return {contributors:[{name:form.elements.author.value.trim(),role:'author'}],subtitle:form.elements.subtitle.value,description:form.elements.description.value,
+          isbn_13:form.elements.isbn13.value,isbn_10:form.elements.isbn10.value};},
+      },body.firstElementChild);
     }
-    section.addEventListener('toggle',()=>{if(section.open&&loadedLibrary!==library.value)load();});
-    library.addEventListener('change',load);
-    select.addEventListener('change',async()=>{
-      const request=++revision, run=runs.find(item=>item.id===select.value);
-      volume.value=''; volume.disabled=!run; slots.replaceChildren(); status.textContent='';
-      if(!run)return;
-      status.textContent='Loading books and open volumes…';
-      const url=path()+'/'+encodeURIComponent(run.id);
-      try{
-        const [linked,known]=await Promise.all([api(url+'/books').then(requireList),api(url+'/volumes').then(requireList).catch(()=>[])]);
-        if(request!==revision||!form.isConnected)return;
-        const open=seriesTiles(linked,known,run.total_count).filter(slot=>slot.position>0&&!slot.book_id&&!seriesVolumeOccupied(linked,Number(slot.position)));
-        slots.replaceChildren(...open.map(slot=>new Option(slot.title||'Open volume',String(slot.position))));
-        status.textContent=open.length?'Open volumes: '+open.slice(0,12).map(slot=>slot.position).join(', ')+(open.length>12?'…':'')+'. You can also enter a new volume.':'Enter an unused volume number.';
-      }catch{if(request===revision)status.textContent='Could not preview volumes. The volume will be checked when you save.';}
-    });
+    section.addEventListener('toggle',()=>{if(section.open&&loadedLibrary!==form.elements.libraryId.value)load();});
+    form.elements.libraryId.addEventListener('change',load);
   }
   function seriesVolumeOccupied(rows,position){
     return rows.find(row=>Number(row.position)>0&&position>=Number(row.position)&&position<=Math.max(Number(row.position),Number(row.position_end)||0));
   }
 
-  async function setupBookSeries(book) {
-    const panel = document.getElementById('bookSeriesEditor');
+  async function setupBookSeries(book, pendingPanel) {
+    const panel = pendingPanel || document.getElementById('bookSeriesEditor');
     if (!panel) return;
     const select = panel.querySelector('#editSeriesChoice');
     const volume = panel.querySelector('#editSeriesVolume');
@@ -793,8 +776,7 @@
     const preview = panel.querySelector('.editSeriesPreview');
     const suggestions = panel.querySelector('.authorSeriesSuggestions');
     const choices = suggestions.querySelector('.authorSeriesChoices');
-    const occupies = (rows, position) => rows.find(row => Number(row.position)>0 &&
-      position >= Number(row.position) && position <= Math.max(Number(row.position),Number(row.position_end)||0));
+    const occupies = seriesVolumeOccupied;
     let previewRun = '';
     async function showSlots() {
       const run = runs.find(item => item.id === select.value);
@@ -857,9 +839,9 @@
     const base = seriesPath({id:book.libraryId});
     const refsPath = `/libraries/${encodeURIComponent(book.libraryId)}/books/${encodeURIComponent(book.id)}/series`;
     let runs = [], refs = [];
-    const refreshControls = () => {
-      const available = runs.filter(run => !refs.some(ref => ref.series_id === run.id));
-      select.replaceChildren(new Option('Choose a series', ''), ...available.map(run => new Option(run.name, run.id)));
+    const availableRuns = () => runs.filter(run => !refs.some(ref => ref.series_id === run.id));
+    const refreshSuggestions = () => {
+      const available = availableRuns();
       const recommended = suggestSeriesByAuthor(book,available);
       suggestions.hidden = !recommended.length;
       choices.replaceChildren(...recommended.map(run=>{
@@ -867,7 +849,7 @@
         pick.type='button';
         pick.dataset.series=run.id;
         pick.textContent=run.name;
-        pick.setAttribute('aria-pressed','false');
+        pick.setAttribute('aria-pressed',String(select.value===run.id));
         pick.addEventListener('click',()=>{
           if (select.disabled) return;
           select.value=run.id;
@@ -875,6 +857,11 @@
         });
         return pick;
       }));
+    };
+    const refreshControls = () => {
+      const available = availableRuns();
+      select.replaceChildren(new Option(pendingPanel?'No series':'Choose a series', ''), ...available.map(run => new Option(run.name, run.id)));
+      refreshSuggestions();
       select.disabled = !available.length;
       volume.disabled = button.disabled = true;
       preview.hidden = true;
@@ -882,11 +869,11 @@
       previewRun = '';
       membership.textContent = refs.length
         ? 'In series: ' + refs.map(ref => ref.series_name + (ref.position > 0 ? ` (vol. ${ref.position})` : '')).join(', ')
-        : 'This book is not linked to a series yet.';
+        : pendingPanel ? 'Choose a series and volume to link this book when you save.' : 'This book is not linked to a series yet.';
       return available.length;
     };
     try {
-      [runs, refs] = await Promise.all([api(base).then(requireList), api(refsPath).then(requireList)]);
+      [runs, refs] = await Promise.all([api(base).then(requireList), pendingPanel ? [] : api(refsPath).then(requireList)]);
       if (!panel.isConnected || !modal.open) return;
       runs.sort((a,b)=>String(a.name).localeCompare(String(b.name)));
       status.textContent = refreshControls() ? '' : runs.length
@@ -895,6 +882,11 @@
     } catch (error) {
       status.textContent = 'Could not load series. ' + error.message;
       return;
+    }
+    if(pendingPanel){
+      const form=panel.closest('form');
+      form.addEventListener('input',event=>{if(panel.isConnected&&event.target.name==='author')refreshSuggestions();});
+      panel.closest('details').addEventListener('toggle',()=>{if(panel.isConnected)refreshSuggestions();});
     }
     const creator = panel.querySelector('.inlineSeriesCreate');
     const createButton = creator.querySelector('#inlineSeriesSave');
@@ -997,6 +989,7 @@
       finally{fields.forEach(field=>{field.disabled=false;});}
     });
 
+    if(pendingPanel)return;
     button.addEventListener('click', async () => {
       if (book.standalone) {
         status.textContent = 'Uncheck Mark as standalone and save the book before adding it to a series.';
@@ -1265,7 +1258,7 @@
           throw Error(`Shelf ${data.shelf} does not exist in ${lib.name}. Choose another shelf or leave the book unshelved.`);
         let seriesLink=null;
         if(data.seriesId){
-          const position=Number(data.seriesPosition);
+          const position=Number(form.elements.seriesPosition?.value);
           if(!Number.isFinite(position)||position<=0||position>1000)throw Error('Enter a series volume number greater than 0 and no higher than 1000.');
           seriesLink={position,url:seriesPath(lib)+'/'+encodeURIComponent(data.seriesId)+'/books'};
           const linked=requireList(await api(seriesLink.url));
