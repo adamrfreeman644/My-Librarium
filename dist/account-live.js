@@ -462,10 +462,12 @@
     const libs = state.libraries.map(l => `<option value="${l.id}" ${b?.libraryId === l.id || (!b && owner === l.name) ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
     show(`<div class="eyebrow">Live Librarium record</div><h1 style="font-size:37px">${b ? 'Edit book' : 'Add book'}</h1>
       <form id="bookForm" data-library-id="${esc(b?.libraryId || '')}" onsubmit="event.preventDefault();saveBook(${b ? `'${b.id}'` : 'null'})">
+      ${b ? '' : newBookLookupFields()}
       <div class="bookEditGrid">
       <div class="bookDetailsFields">
         <label>Title<input name="title" required value="${esc(b?.title || '')}"></label>
-        <label>Author<input name="author" required value="${esc(b?.author || '')}"></label>
+        <label>Author<input name="author" ${b?'required':''} value="${esc(b?.author || '')}"></label>
+        ${!b ? '<label>Subtitle<input name="subtitle"></label><label>Description<textarea name="description" rows="3"></textarea></label>' : ''}
         <div class="bookPlacement">
           ${b ? `<div><span class="bookLibraryLabel">Library</span><span class="bookLibraryValue">${esc(b.owner)}</span></div>`
               : `<label>Library<select name="libraryId">${libs}</select></label>`}
@@ -502,12 +504,183 @@
         <button id="addBookToSeries" type="button" disabled>Add to series</button><p id="editSeriesMessage" role="status"></p>
       </fieldset>` : ''}
       </div>
+      ${b ? '' : newBookExtraFields()}
       <p id="bookSaveStatus" role="status"></p>
       <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}','${b.libraryId}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
     document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
     if (b) setupBookSeries(b);
-    else loadBookMediaTypes(document.getElementById('bookForm'));
+    else {const form=document.getElementById('bookForm');loadBookMediaTypes(form);setupNewBookFields(form);}
   };
+
+  function newBookLookupFields() {
+    return `<section class="newBookLookup" aria-label="Book lookup">
+      <label for="newBookLookup">ISBN or title lookup</label>
+      <div class="lookuprow"><input id="newBookLookup" placeholder="ISBN, title or author" autocomplete="off">
+      <button id="lookupNewBookISBN" type="button">Find by ISBN</button><button id="lookupNewBookTitle" type="button">Find by title</button></div>
+      <p id="newBookLookupStatus" role="status"></p><div id="newBookLookupResults"></div>
+    </section>`;
+  }
+  function newBookExtraFields() {
+    return `<details class="newBookSection" open><summary>Genres, tags and lists</summary>
+      <div class="newBookClassifications">
+        <fieldset><legend>Genres</legend><div id="newBookGenres" class="bookCheckList">Loading genres…</div></fieldset>
+        <fieldset><legend>Tags</legend><div id="newBookTags" class="bookCheckList">Loading tags…</div>
+          <label>New tag (optional)<input name="newTag" maxlength="80"></label></fieldset>
+        <fieldset><legend>Lists</legend><div id="newBookLists" class="bookCheckList">Loading lists…</div></fieldset>
+      </div>
+    </details>
+    <details class="newBookSection"><summary>Additional contributors</summary>
+      <div id="newBookContributors"></div><button id="newBookAddContributor" type="button">＋ Add contributor</button>
+    </details>
+    <details id="newBookEdition" class="newBookSection"><summary>Edition details</summary>
+      <label class="standaloneOption"><input name="includeEdition" type="checkbox"> Save an edition for this book</label>
+      <div class="newBookEditionFields">
+        <label>Format<select name="format"><option value="paperback">Paperback</option><option value="hardcover">Hardcover</option><option value="ebook">E-book</option><option value="audiobook">Audiobook</option></select></label>
+        <label>Edition name<input name="editionName"></label>
+        <label>Publisher<input name="publisher"></label>
+        <label>Publication date<input name="publicationDate" type="date"></label>
+        <label>Language code<input name="language" placeholder="e.g. en or en-GB"></label>
+        <label>Page count<input name="pageCount" type="number" min="1" step="1"></label>
+        <label>ISBN-13<input name="isbn13" inputmode="numeric"></label>
+        <label>ISBN-10<input name="isbn10" inputmode="text"></label>
+        <label>Narrator<input name="narrator"></label>
+        <label>Duration (hours)<input name="durationHours" type="number" min="0" step="1"></label>
+        <label>Duration (minutes)<input name="durationMinutes" type="number" min="0" max="59" step="1"></label>
+        <label class="standaloneOption"><input name="primaryEdition" type="checkbox" checked> Primary edition</label>
+      </div>
+    </details>
+    <label id="newBookCoverChoice" class="standaloneOption" hidden><input name="importCover" type="checkbox" checked> Import the lookup cover</label>`;
+  }
+
+  function editionLanguage(value) {
+    const s=String(value||'').trim().replace(/_/g,'-'), m=s.match(/^([a-z]{2})(?:-([a-z]{2}))?$/i);
+    if(m)return m[1].toLowerCase()+(m[2]?'-'+m[2].toUpperCase():'');
+    return ({eng:'en',fra:'fr',fre:'fr',deu:'de',ger:'de',spa:'es',ita:'it',jpn:'ja',zho:'zh',chi:'zh',por:'pt',rus:'ru',kor:'ko',nld:'nl',dut:'nl'})[s.toLowerCase()]||'';
+  }
+  const isbnClean = value => String(value||'').toUpperCase().replace(/[\s-]/g,'');
+  function validISBN(value) {
+    if(/^\d{13}$/.test(value))return [...value].reduce((sum,n,i)=>sum+Number(n)*(i%2?3:1),0)%10===0;
+    if(/^\d{9}[\dX]$/.test(value))return [...value].reduce((sum,n,i)=>sum+(n==='X'?10:Number(n))*(10-i),0)%11===0;
+    return false;
+  }
+  function bookEdition(data) {
+    if(data.includeEdition!=='on')return null;
+    const isbn10=isbnClean(data.isbn10),isbn13=isbnClean(data.isbn13), language=editionLanguage(data.language);
+    if((isbn10&&(!validISBN(isbn10)||isbn10.length!==10))||(isbn13&&(!validISBN(isbn13)||isbn13.length!==13)))throw Error('Check the ISBN in Edition details.');
+    if(data.language.trim()&&!language)throw Error('Enter a language code like en or en-GB, or leave it blank.');
+    const audio=data.format==='audiobook', ebook=data.format==='ebook';
+    const duration=(Number(data.durationHours)||0)*3600+(Number(data.durationMinutes)||0)*60;
+    return {format:data.format,edition_name:data.editionName.trim(),language,publisher:data.publisher.trim(),
+      publish_date:data.publicationDate,isbn_10:!audio&&!ebook?isbn10||null:null,isbn_13:!audio?isbn13||null:null,
+      page_count:!audio&&data.pageCount?Number(data.pageCount):null,duration_seconds:audio&&duration?duration:null,
+      narrator:audio?data.narrator.trim()||null:null,is_primary:data.primaryEdition==='on'};
+  }
+
+  function setupNewBookFields(form) {
+    const input=form.querySelector('#newBookLookup'),status=form.querySelector('#newBookLookupStatus'),results=form.querySelector('#newBookLookupResults');
+    const genreBox=form.querySelector('#newBookGenres'),tagBox=form.querySelector('#newBookTags'),listBox=form.querySelector('#newBookLists');
+    const edition=form.querySelector('#newBookEdition');
+    const contributorRows=form.querySelector('#newBookContributors');
+    let tagsRevision=0,lookupRevision=0,genres=[];
+    function renderChecks(container,rows,name){
+      container.replaceChildren();
+      if(!rows.length){container.textContent='None available.';return;}
+      for(const row of rows){
+        if(!row?.id||!row.name)continue;
+        const label=document.createElement('label'),check=document.createElement('input');
+        check.type='checkbox';check.name=name;check.value=row.id;
+        label.append(check,document.createTextNode(row.name));container.append(label);
+      }
+    }
+    function loadOptions(path,container,name,transform=value=>value){
+      api(path).then(value=>{if(form.isConnected)renderChecks(container,requireList(transform(value)),name);})
+        .catch(()=>{if(form.isConnected)container.textContent='Could not load options.';});
+    }
+    api('/genres').then(value=>{genres=requireList(value);if(form.isConnected)renderChecks(genreBox,genres,'genreId');})
+      .catch(()=>{if(form.isConnected)genreBox.textContent='Could not load genres.';});
+    loadOptions('/me/lists',listBox,'listId',value=>(Array.isArray(value)?value:value.items||[]).filter(l=>l.kind==='manual'));
+    async function loadTags(){
+      const rev=++tagsRevision, lib=form.elements.libraryId.value;
+      tagBox.textContent='Loading tags…';
+      try{
+        const tags=await api('/libraries/'+encodeURIComponent(lib)+'/tags');
+        if(rev===tagsRevision&&form.isConnected)renderChecks(tagBox,requireList(tags),'tagId');
+      }catch{if(rev===tagsRevision&&form.isConnected)tagBox.textContent='Could not load tags.';}
+    }
+    form.elements.libraryId.addEventListener('change',loadTags);
+    loadTags();
+    function addContributor(name='',role='author'){
+      const row=document.createElement('div');
+      row.className='newBookContributor';
+      const text=document.createElement('input');text.placeholder='Contributor name';text.setAttribute('aria-label','Contributor name');text.value=name;text.name='contributorName';
+      const select=document.createElement('select');select.name='contributorRole';select.setAttribute('aria-label','Contributor role');
+      for(const value of ['author','editor','illustrator','translator','narrator','colorist','letterer','penciller','inker','cover_artist'])
+        select.add(new Option(value.replace(/_/g,' '),value));
+      select.value=role;
+      const remove=document.createElement('button');remove.type='button';remove.textContent='Remove';remove.addEventListener('click',()=>row.remove());
+      row.append(text,select,remove);contributorRows.append(row);return text;
+    }
+    form.querySelector('#newBookAddContributor').addEventListener('click',()=>addContributor().focus());
+    function setEditionEnabled(){
+      const enabled=form.elements.includeEdition.checked;
+      edition.querySelectorAll('.newBookEditionFields input,.newBookEditionFields select').forEach(field=>field.disabled=!enabled);
+    }
+    form.elements.includeEdition.addEventListener('change',setEditionEnabled);setEditionEnabled();
+    function applyResult(item,lookedUpISBN){
+      const verifiedISBN=(value,length)=>{const code=isbnClean(value);return code.length===length&&validISBN(code)?code:'';};
+      for(const [field,value] of Object.entries({title:item.title,subtitle:item.subtitle,description:item.description,
+        publisher:item.publisher,publicationDate:/^\d{4}-\d{2}-\d{2}$/.test(item.publish_date||'')?item.publish_date:'',
+        language:editionLanguage(item.language),pageCount:item.page_count,
+        isbn10:verifiedISBN(item.isbn_10,10)||(lookedUpISBN.length===10?lookedUpISBN:''),isbn13:verifiedISBN(item.isbn_13,13)||(lookedUpISBN.length===13?lookedUpISBN:'')}))
+        form.elements[field].value=String(value??'');
+      const authors=Array.isArray(item.authors)?item.authors.filter(a=>typeof a==='string'&&a.trim()):[];
+      if(authors.length){
+        const parsed=authors.map(raw=>{
+          const match=raw.match(/^(.*?)\s+\((author|editor|illustrator|translator|narrator)\)$/i);
+          return match?{name:match[1],role:match[2].toLowerCase()}:{name:raw,role:'author'};
+        });
+        const first=parsed.findIndex(person=>person.role==='author');
+        if(first>=0)form.elements.author.value=parsed.splice(first,1)[0].name;
+        contributorRows.replaceChildren();
+        for(const person of parsed)addContributor(person.name,person.role);
+        if(parsed.length)contributorRows.closest('details').open=true;
+      }
+      const categoryNames=new Set((Array.isArray(item.categories)?item.categories:[]).map(x=>String(x).trim().toLowerCase()));
+      for(const box of genreBox.querySelectorAll('input')){
+        const genre=genres.find(g=>g.id===box.value);
+        if(genre&&categoryNames.has(genre.name.toLowerCase()))box.checked=true;
+      }
+      form.dataset.lookupCover='';
+      try{const cover=new URL(item.cover_url);if(cover.protocol==='https:')form.dataset.lookupCover=cover.href;}catch{}
+      form.querySelector('#newBookCoverChoice').hidden=!form.dataset.lookupCover;
+      form.elements.includeEdition.checked=true;setEditionEnabled();edition.open=true;
+      results.replaceChildren();status.textContent='Details filled in. Review them before saving.';
+    }
+    async function lookup(byISBN){
+      const query=byISBN?isbnClean(input.value):input.value.trim();
+      const rev=++lookupRevision;
+      results.replaceChildren();
+      if(byISBN?!validISBN(query):query.length<2){status.textContent=byISBN?'Enter a valid ISBN-10 or ISBN-13.':'Enter a title or author.';return;}
+      status.textContent='Looking up book details…';
+      try{
+        const rows=requireList(await api(byISBN?'/lookup/isbn/'+encodeURIComponent(query):'/lookup/books?q='+encodeURIComponent(query)));
+        if(!form.isConnected||rev!==lookupRevision)return;
+        for(const item of rows.slice(0,12)){
+          if(!item?.title)continue;
+          const pick=document.createElement('button');pick.type='button';
+          const author=Array.isArray(item.authors)?item.authors.join(', '):'';
+          pick.textContent=[item.title,author,item.provider_display||item.provider].filter(Boolean).join(' · ');
+          pick.addEventListener('click',()=>applyResult(item,byISBN?query:''));results.append(pick);
+        }
+        status.textContent=results.children.length?'Choose a result to fill in the form.':'No matching metadata. You can enter the details manually.';
+      }catch(error){if(rev===lookupRevision)status.textContent=error.message;}
+    }
+    form.querySelector('#lookupNewBookISBN').addEventListener('click',()=>lookup(true));
+    form.querySelector('#lookupNewBookTitle').addEventListener('click',()=>lookup(false));
+    input.addEventListener('keydown',event=>{
+      if(event.key==='Enter'){event.preventDefault();lookup(/^\d{9}[\dX]$|^\d{13}$/.test(isbnClean(input.value)));}
+    });
+  }
 
   async function loadBookMediaTypes(form) {
     const select=form.elements.mediaTypeId, submit=form.querySelector('button.primary');
@@ -973,7 +1146,7 @@
     for (const shelf of current) if (shelf.id !== target?.id) await api(`/libraries/${book.libraryId}/shelves/${shelf.id}/books/${book.id}`, { method: 'DELETE' });
   }
 
-  async function resolveAuthor(name) {
+  async function resolveAuthor(name,role='author') {
     const query=name.trim();
     if(!query)throw Error('Enter an author name.');
     const path='/contributors';
@@ -987,13 +1160,13 @@
       catch(error){contributor=await find();if(!contributor)throw error;}
     }
     if(!contributor?.id)throw Error('Librarium did not return an author record.');
-    return {contributor_id:contributor.id,role:'author'};
+    return {contributor_id:contributor.id,role};
   }
 
   window.saveBook = async function (id) {
     const form = document.getElementById('bookForm');
     if(!form||form.dataset.saving==='true')return;
-    const data = Object.fromEntries(new FormData(form));
+    const fields = new FormData(form), data = Object.fromEntries(fields);
     const status=form.querySelector('#bookSaveStatus'), submit=form.querySelector('.actions button.primary');
     if(!id&&!data.mediaTypeId){status.textContent='Choose a media type first.';return;}
     form.dataset.saving='true';submit.disabled=true;status.textContent='Saving…';
@@ -1023,18 +1196,46 @@
         if(!lib)throw Error('Choose a library.');
         if(data.shelf && !(state.shelves.get(lib.id)||[]).some(s=>s.name.toUpperCase()===data.shelf.toUpperCase()))
           throw Error(`Shelf ${data.shelf} does not exist in ${lib.name}. Choose another shelf or leave the book unshelved.`);
+        const edition=bookEdition(data);
+        const contributors=[];
+        if(data.author.trim())contributors.push(await resolveAuthor(data.author));
+        const names=fields.getAll('contributorName'),roles=fields.getAll('contributorRole');
+        for(let i=0;i<names.length;i++)if(names[i].trim()){
+          const person=await resolveAuthor(names[i],roles[i]);
+          if(!contributors.some(c=>c.contributor_id===person.contributor_id&&c.role===person.role))contributors.push(person);
+        }
+        const tagIDs=fields.getAll('tagId');
+        if(data.newTag.trim()){
+          const tagPath=`/libraries/${encodeURIComponent(lib.id)}/tags`;
+          const name=data.newTag.trim(), tags=requireList(await api(tagPath));
+          const tag=tags.find(t=>String(t.name).toLowerCase()===name.toLowerCase())||
+            await api(tagPath,{method:'POST',body:JSON.stringify({name,color:'#2e5848'})});
+          if(!tag?.id)throw Error('Librarium did not confirm the new tag.');
+          tagIDs.push(tag.id);
+        }
+        const payload={title:data.title.trim(),subtitle:data.subtitle.trim(),description:data.description.trim(),
+          media_type_id:data.mediaTypeId,contributors,genre_ids:fields.getAll('genreId'),tag_ids:[...new Set(tagIDs)]};
+        if(edition)payload.edition=edition;
         const created = await api(`/libraries/${encodeURIComponent(lib.id)}/books`, {
-          method:'POST',body:JSON.stringify({title:data.title.trim(),media_type_id:data.mediaTypeId,
-            contributors:[await resolveAuthor(data.author)]}),
+          method:'POST',body:JSON.stringify(payload),
         });
+        if(!created?.id)throw Error('Librarium did not confirm the new book. Check the catalogue before retrying.');
         createdBook=true;
-        await setShelf(normaliseBook(created,lib),data.shelf);
+        const sideEffects=[];
+        if(data.shelf)sideEffects.push(setShelf(normaliseBook(created,lib),data.shelf));
+        if(data.importCover==='on'&&form.dataset.lookupCover)sideEffects.push(api(
+          `/libraries/${encodeURIComponent(lib.id)}/books/${encodeURIComponent(created.id)}/cover/fetch`,
+          {method:'POST',body:JSON.stringify({url:form.dataset.lookupCover})}));
+        for(const listId of fields.getAll('listId'))sideEffects.push(api(
+          `/me/lists/${encodeURIComponent(listId)}/books/${encodeURIComponent(created.id)}`,{method:'POST'}));
+        const followUp=await Promise.allSettled(sideEffects);
+        if(followUp.some(r=>r.status==='rejected'))throw Error('Some optional details could not be applied.');
         owner=lib.name;
       }
       modal.close(); await loadLive(); toast('Saved to the live Librarium database');
     } catch (error) {
       if(createdBook){
-        status.textContent='The book was created, but the shelf or catalogue could not be updated. Close this form and refresh before trying again.';
+        status.textContent='The book was created, but some optional updates or the catalogue refresh failed. Close this form and refresh before trying again.';
         toast(status.textContent);
       }else status.textContent=error.message;
     } finally {
