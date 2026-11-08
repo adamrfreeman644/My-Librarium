@@ -523,10 +523,10 @@
   function newBookExtraFields() {
     return `<details class="newBookSection" open><summary>Genres, tags and lists</summary>
       <div class="newBookClassifications">
-        <fieldset><legend>Genres</legend><div id="newBookGenres" class="bookCheckList">Loading genres…</div></fieldset>
+        <fieldset><legend>Genres</legend><input id="newBookGenresSearch" type="search" placeholder="Search genres" aria-label="Search genres"><div id="newBookGenres" class="bookCheckList searchableChecks">Loading genres…</div><p id="newBookGenresCount" class="pickerCount" role="status"></p><button id="newBookGenresMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>
         <fieldset><legend>Tags</legend><div id="newBookTags" class="bookCheckList">Loading tags…</div>
           <label>New tag (optional)<input name="newTag" maxlength="80"></label></fieldset>
-        <fieldset><legend>Lists</legend><div id="newBookLists" class="bookCheckList">Loading lists…</div></fieldset>
+        <fieldset><legend>Lists</legend><input id="newBookListsSearch" type="search" placeholder="Search lists" aria-label="Search lists"><div id="newBookLists" class="bookCheckList searchableChecks">Loading lists…</div><p id="newBookListsCount" class="pickerCount" role="status"></p><button id="newBookListsMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>
       </div>
     </details>
     <details class="newBookSection"><summary>Additional contributors</summary>
@@ -592,13 +592,38 @@
         label.append(check,document.createTextNode(row.name));container.append(label);
       }
     }
-    function loadOptions(path,container,name,transform=value=>value){
-      api(path).then(value=>{if(form.isConnected)renderChecks(container,requireList(transform(value)),name);})
+    function searchablePicker(container){
+      const search=form.querySelector('#'+container.id+'Search'), more=form.querySelector('#'+container.id+'More');
+      const count=form.querySelector('#'+container.id+'Count');
+      let limit=8;
+      function update(){
+        const q=search.value.trim().toLowerCase();
+        const labels=[...container.querySelectorAll('label')];
+        let matching=0;
+        for(const label of labels){
+          const matches=label.textContent.toLowerCase().includes(q);
+          label.hidden=!matches||(matching++>=limit);
+        }
+        const shown=Math.min(matching,limit), remaining=matching-shown;
+        const checked=labels.filter(label=>label.querySelector('input').checked).length;
+        count.textContent=labels.length?(matching?shown+' of '+matching+' shown':'No matches')+' · '+checked+' selected':'';
+        more.hidden=!remaining;
+        more.textContent=remaining?'Show more ('+remaining+' left)':'Show more';
+      }
+      search.addEventListener('input',()=>{limit=8;update();});
+      search.addEventListener('keydown',event=>{if(event.key==='Enter')event.preventDefault();});
+      container.addEventListener('change',update);
+      more.addEventListener('click',()=>{limit+=12;update();});
+      return update;
+    }
+    const updateGenres=searchablePicker(genreBox), updateLists=searchablePicker(listBox);
+    function loadOptions(path,container,name,transform=value=>value,updated=()=>{}){
+      api(path).then(value=>{if(form.isConnected){renderChecks(container,requireList(transform(value)),name);updated();}})
         .catch(()=>{if(form.isConnected)container.textContent='Could not load options.';});
     }
-    api('/genres').then(value=>{genres=requireList(value);if(form.isConnected)renderChecks(genreBox,genres,'genreId');})
+    api('/genres').then(value=>{genres=requireList(value);if(form.isConnected){renderChecks(genreBox,genres,'genreId');updateGenres();}})
       .catch(()=>{if(form.isConnected)genreBox.textContent='Could not load genres.';});
-    loadOptions('/me/lists',listBox,'listId',value=>(Array.isArray(value)?value:value.items||[]).filter(l=>l.kind==='manual'));
+    loadOptions('/me/lists',listBox,'listId',value=>(Array.isArray(value)?value:value.items||[]).filter(l=>l.kind==='manual'),updateLists);
     async function loadTags(){
       const rev=++tagsRevision, lib=form.elements.libraryId.value;
       tagBox.textContent='Loading tags…';
@@ -650,6 +675,7 @@
         const genre=genres.find(g=>g.id===box.value);
         if(genre&&categoryNames.has(genre.name.toLowerCase()))box.checked=true;
       }
+      updateGenres();
       form.dataset.lookupCover='';
       try{const cover=new URL(item.cover_url);if(cover.protocol==='https:')form.dataset.lookupCover=cover.href;}catch{}
       form.querySelector('#newBookCoverChoice').hidden=!form.dataset.lookupCover;
