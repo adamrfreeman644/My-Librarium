@@ -973,6 +973,23 @@
     for (const shelf of current) if (shelf.id !== target?.id) await api(`/libraries/${book.libraryId}/shelves/${shelf.id}/books/${book.id}`, { method: 'DELETE' });
   }
 
+  async function resolveAuthor(name) {
+    const query=name.trim();
+    if(!query)throw Error('Enter an author name.');
+    const path='/contributors';
+    const find=async()=>{
+      const rows=requireList(await api(path+'?q='+encodeURIComponent(query)));
+      return rows.find(c=>c?.id&&String(c.name||'').trim().toLowerCase()===query.toLowerCase());
+    };
+    let contributor=await find();
+    if(!contributor){
+      try{contributor=await api(path,{method:'POST',body:JSON.stringify({name:query})});}
+      catch(error){contributor=await find();if(!contributor)throw error;}
+    }
+    if(!contributor?.id)throw Error('Librarium did not return an author record.');
+    return {contributor_id:contributor.id,role:'author'};
+  }
+
   window.saveBook = async function (id) {
     const form = document.getElementById('bookForm');
     if(!form||form.dataset.saving==='true')return;
@@ -997,7 +1014,7 @@
         }
         const contributors = data.author.trim() === book.author ? raw.contributors : [
           ...(raw.contributors || []).filter(c => c.role && c.role !== 'author'),
-          { name: data.author.trim(), role: 'author' }
+          await resolveAuthor(data.author)
         ];
         await api(bookPath, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: (raw.genres || []).map(x => x.id), tag_ids: [...new Set(tagIDs)] }) });
         await setShelf(book, data.shelf);
@@ -1008,7 +1025,7 @@
           throw Error(`Shelf ${data.shelf} does not exist in ${lib.name}. Choose another shelf or leave the book unshelved.`);
         const created = await api(`/libraries/${encodeURIComponent(lib.id)}/books`, {
           method:'POST',body:JSON.stringify({title:data.title.trim(),media_type_id:data.mediaTypeId,
-            contributors:[{name:data.author.trim(),role:'author'}]}),
+            contributors:[await resolveAuthor(data.author)]}),
         });
         createdBook=true;
         await setShelf(normaliseBook(created,lib),data.shelf);
