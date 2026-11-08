@@ -85,6 +85,7 @@
   }
 
   function loginScreen(message = '') {
+    document.getElementById('autoShelfButton').hidden=true;
     bookFilters.hidden = true;
     bookFilters.open = false;
     filterBoxes.forEach(box=>{box.checked=true;});
@@ -181,6 +182,7 @@
     state.shelves = new Map(shelfSets);
     books = (await Promise.all(state.libraries.map(allBooks))).flat();
     state.loaded = true;
+    document.getElementById('autoShelfButton').hidden=!state.libraries.some(lib=>lib.name==='Book Hoard');
     bookFilters.hidden = false;
     document.getElementById('seriesReviewLink').hidden = false;
     document.querySelector('.heading > button').disabled = !state.libraries.length;
@@ -308,6 +310,16 @@
     return created;
   }
 
+  function seriesClassificationFields(prefix){
+    return `<div class="newSeriesFields">
+      <label>Series genres <input id="${prefix}Genres" placeholder="e.g. Fantasy, Adventure"></label>
+      <label>Series audience <select id="${prefix}Audience"><option value="">Unspecified</option><option>Young Adult</option><option>Adult</option></select></label>
+    </div>`;
+  }
+  function readSeriesClassification(panel,prefix){
+    return {genres:panel.querySelector('#'+prefix+'Genres').value.split(',').map(name=>name.trim()).filter(Boolean),
+      demographic:panel.querySelector('#'+prefix+'Audience').value};
+  }
   function openNewSeries() {
     const initial = state.libraries.find(lib=>lib.name===owner)?.id || '';
     show(`<div class="eyebrow">Book series</div><h2>New series</h2>
@@ -324,6 +336,7 @@
           <div><label for="newSeriesStatus">Status</label><select id="newSeriesStatus" name="status"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
           <div><label for="newSeriesCount">Total volumes (optional)</label><input id="newSeriesCount" name="count" type="number" min="1" max="1000" step="1"></div>
         </div>
+        ${seriesClassificationFields("newSeries")}
         <label for="newSeriesDescription">Description (optional)</label>
         <textarea id="newSeriesDescription" name="description" rows="2" maxlength="2000"></textarea>
         <p id="newSeriesStatusMessage" role="status"></p>
@@ -339,7 +352,7 @@
       const fields=Object.fromEntries(new FormData(form));
       const lib=state.libraries.find(l=>l.id===fields.library), name=fields.name.trim().replace(/\s+/g,' ');
       if(!lib||!name){status.textContent='Choose a library and enter a series name.';return;}
-      const payload={name,status:fields.status,description:fields.description.trim()};
+      const payload={name,status:fields.status,description:fields.description.trim(),...readSeriesClassification(form,"newSeries")};
       if(fields.count)payload.total_count=Number(fields.count);
       busy=true;controls.forEach(control=>{control.disabled=true;});status.textContent='Creating series…';
       try{
@@ -390,7 +403,8 @@
     show(`<div class="eyebrow">${esc(lib.name)}</div><h2>${esc(entry.name || 'Untitled series')}</h2>
       ${entry.description ? `<p>${esc(entry.description)}</p>` : ''}
       <div id="liveSeriesBooks" class="shelfBooks" aria-live="polite">Loading volumes…</div>
-      <div class="actions"><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a></div>`);
+      <div class="actions"><button type="button" id="editSeriesShelving">Edit series shelving</button><a href="${officialSeries}" target="_blank" rel="noopener">Manage in Librarium</a></div>`);
+    document.getElementById('editSeriesShelving').onclick=()=>editSeriesShelving(entry,lib);
     const panel = document.getElementById('liveSeriesBooks');
     try {
       const path = `${seriesPath(lib)}/${encodeURIComponent(entry.id)}`;
@@ -478,6 +492,9 @@
           <label>Physical shelf<select name="shelf">${shelfOptions(b?.shelf || shelf)}</select></label>
         </div>
         ${!b ? '<label>Media type<select name="mediaTypeId" required disabled><option value="">Loading media types…</option></select></label>' : ''}
+        <label>Shelf audience<select name="shelfAudience">
+          ${[['','Unspecified'],['ya','Young Adult'],['adult','Adult']].map(([value,label])=>`<option value="${value}" ${value===bookAudienceTag(b?.raw?.tags)?'selected':''}>${label}</option>`).join('')}
+        </select></label>
         ${b && state.libraries.length > 1 ? '<div><button id="moveBookButton" type="button">Move to another library</button></div>' : ''}
         ${b ? `<label class="standaloneOption"><input id="standaloneBook" name="standalone" type="checkbox" ${b.standalone?'checked':''} ${b.raw.series?.length?'disabled':''}> Mark as standalone</label>
           <p class="standaloneHint">${b.raw.series?.length?'This book already belongs to a series.':'Standalone books are skipped in Series Review.'}</p>` : ''}
@@ -516,6 +533,7 @@
             <div><label for="inlineSeriesStatus">Status</label><select id="inlineSeriesStatus"><option value="ongoing">Ongoing</option><option value="completed">Completed</option></select></div>
             <div><label for="inlineSeriesCount">Total volumes (optional)</label><input id="inlineSeriesCount" inputmode="numeric"></div>
           </div>
+          ${seriesClassificationFields("inlineSeries")}
           <label for="inlineSeriesDescription">Description (optional)</label><textarea id="inlineSeriesDescription" rows="2" maxlength="2000"></textarea>
           <button id="inlineSeriesSave" type="button" class="primary">Create series</button>
           <p id="inlineSeriesMessage" role="status"></p>
@@ -972,7 +990,7 @@
       }
       const fields=[...creator.querySelectorAll('button,input,select,textarea')];
       const payload={name,status:creator.querySelector('#inlineSeriesStatus').value,
-        description:creator.querySelector('#inlineSeriesDescription').value.trim()};
+        description:creator.querySelector('#inlineSeriesDescription').value.trim(),...readSeriesClassification(creator,'inlineSeries')};
       if(count)payload.total_count=Number(count);
       fields.forEach(field=>{field.disabled=true;});createStatus.textContent='Creating series…';
       try{
@@ -1234,20 +1252,26 @@
     const status=form.querySelector('#bookSaveStatus'), submit=form.querySelector('.actions button.primary');
     if(!id&&!data.mediaTypeId){status.textContent='Choose a media type first.';return;}
     form.dataset.saving='true';submit.disabled=true;status.textContent='Saving…';
-    let createdBook=false;
+    let createdBook=false, placement=null;
     try {
       if (id) {
         const book = books.find(b => b.id === id && b.libraryId === form.dataset.libraryId);
         const marker = form.elements.standalone;
         const changeMarker = marker && !marker.disabled && marker.checked !== book.standalone;
         const bookPath = `/libraries/${encodeURIComponent(book.libraryId)}/books/${encodeURIComponent(id)}`;
-        const raw = changeMarker ? await api(bookPath) : book.raw;
+        const changeAudience=data.shelfAudience!==bookAudienceTag(book.raw.tags);
+        const raw = changeMarker||changeAudience ? await api(bookPath) : book.raw;
         const tags = raw.tags || [];
         let tagIDs = tags.map(t=>t.id);
         if (changeMarker) {
           if (marker.checked && raw.series?.length) throw new Error('This book already belongs to a series.');
           tagIDs = tags.filter(t=>!isStandaloneTag(t)).map(t=>t.id);
           if (marker.checked) tagIDs.push((await standaloneTag(book.libraryId)).id);
+        }
+        if(changeAudience){
+          const old=new Set(tags.filter(t=>isBookAudienceTag(t)).map(t=>t.id));
+          tagIDs=tagIDs.filter(id=>!old.has(id));
+          if(data.shelfAudience)tagIDs.push((await ensureBookAudienceTag(book.libraryId,data.shelfAudience)).id);
         }
         const contributors = data.author.trim() === book.author ? raw.contributors : [
           ...(raw.contributors || []).filter(c => c.role && c.role !== 'author'),
@@ -1277,6 +1301,7 @@
           if(!contributors.some(c=>c.contributor_id===person.contributor_id&&c.role===person.role))contributors.push(person);
         }
         const tagIDs=fields.getAll('tagId');
+        if(data.shelfAudience)tagIDs.push((await ensureBookAudienceTag(lib.id,data.shelfAudience)).id);
         if(data.newTag.trim()){
           const tagPath=`/libraries/${encodeURIComponent(lib.id)}/tags`;
           const name=data.newTag.trim(), tags=requireList(await api(tagPath));
@@ -1303,8 +1328,10 @@
         const followUp=await Promise.allSettled(sideEffects);
         if(followUp.some(r=>r.status==='rejected'))throw Error('Some optional details could not be applied.');
         owner=lib.name;
+        if(!data.shelf&&lib.name==='Book Hoard')placement={bookId:created.id,libraryId:lib.id};
       }
       modal.close(); await loadLive(); toast('Saved to the live Librarium database');
+      if(placement)openShelfPlanner(placement);
     } catch (error) {
       if(createdBook){
         status.textContent='The book was created, but some optional updates or the catalogue refresh failed. Close this form and refresh before trying again.';
@@ -1319,6 +1346,335 @@
 
   window.confirmDelete = function (id, lib = '') { const b = books.find(x => x.id === id && (!lib || x.libraryId === lib)); show(`<h2>Remove from ${esc(b.owner)}?</h2><p style="margin-top:15px">This retires that library’s copy of “${esc(b.title)}”.</p><div class="actions"><button onclick="openBook('${id}','','${b.libraryId}')">Cancel</button><button class="danger" onclick="deleteBook('${id}','${b.libraryId}')">Remove copy</button></div>`); };
   window.deleteBook = async function (id, lib = '') { const b = books.find(x => x.id === id && (!lib || x.libraryId === lib)); try { await api(`/libraries/${b.libraryId}/books/${id}`, { method: 'DELETE' }); modal.close(); await loadLive(); } catch (error) { toast(error.message); } };
+
+  const bookAudienceNames={ya:'Shelf audience: Young Adult',adult:'Shelf audience: Adult'};
+  const isBookAudienceTag=tag=>Object.values(bookAudienceNames).some(name=>name.toLowerCase()===String(tag.name).toLowerCase());
+  function bookAudienceTag(tags=[]){
+    return Object.keys(bookAudienceNames).find(key=>tags.some(tag=>String(tag.name).toLowerCase()===bookAudienceNames[key].toLowerCase()))||'';
+  }
+  async function ensureBookAudienceTag(lib,key){
+    const name=bookAudienceNames[key], url='/libraries/'+encodeURIComponent(lib)+'/tags';
+    if(!name)throw Error('Choose Young Adult or Adult.');
+    const find=async()=>requireList(await api(url)).find(tag=>String(tag.name).toLowerCase()===name.toLowerCase());
+    let tag=await find();
+    if(!tag){try{tag=await api(url,{method:'POST',body:JSON.stringify({name,color:'#2e5848'})});}
+      catch(error){tag=await find();if(!tag)throw error;}}
+    if(!tag?.id)throw Error('Could not save the shelf audience.');
+    return tag;
+  }
+
+  const shelfKey=value=>String(value||'').normalize('NFKC').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const shelfGenre=value=>{
+    const key=shelfKey(value);
+    return ({'science fiction':'sci fi','romantic comedy':'romcom','romantic fantasy':'romantasy','fantasy romance':'romantasy','historical fiction':'historical'})[key]||key;
+  };
+  const shelfAudience=value=>{
+    const key=shelfKey(value);
+    if(/\b(ya|young adult|teen|juvenile|middle grade|childrens|children|shounen|shoujo|shonen|shojo)\b/.test(key))return 0;
+    if(/\b(adult|new adult|seinen|josei)\b/.test(key))return 1;
+    return null;
+  };
+  const shelfAuthors=book=>new Set((book.raw.contributors||[]).filter(c=>!c.role||c.role==='author').map(c=>shelfKey(c.name)).filter(Boolean));
+  function shelfPrefs(lib){
+    const key='librarium-shelf-planner-v1:'+lib.id;
+    let value={};
+    try{value=JSON.parse(localStorage.getItem(key)||'{}')||{};}catch{}
+    value.capacity ||= {};
+    value.series ||= {};
+    return {value,save:()=>localStorage.setItem(key,JSON.stringify(value))};
+  }
+  function editSeriesShelving(entry,lib){
+    const prefs=shelfPrefs(lib), saved=prefs.value.series[entry.id]||{};
+    show(`<h2>Shelving · ${esc(entry.name)}</h2><p>These genres and audience apply to the whole series. Put the preferred shelf genre first.</p>
+      <form id="seriesShelvingForm" class="shelfPlannerForm">
+        <label>Series genres (comma separated)<input name="genres" value="${esc((entry.genres||[]).join(', '))}"></label>
+        <label>Audience<input name="audience" placeholder="Young Adult or Adult" value="${esc(entry.demographic||'')}"></label>
+        <label>First publication year<input name="year" type="number" min="1" max="9999" value="${esc(String(entry.publication_year||''))}"></label>
+        <label>Shared universe (optional)<input name="universe" value="${esc(saved.universe||'')}"></label>
+        <label>Series order in universe (optional)<input name="order" type="number" min="1" step="any" value="${esc(String(saved.order||''))}"></label>
+        <p>Universe and custom order are saved in this browser. Without a custom order, the planner uses the saved publication years.</p>
+        <p role="status"></p><div class="actions"><button type="button" data-back>Back</button><button class="primary">Save shelving details</button></div>
+      </form>`);
+    const form=document.getElementById('seriesShelvingForm');
+    form.querySelector('[data-back]').onclick=()=>showLiveSeries({entry,lib});
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      const fields=Object.fromEntries(new FormData(form)), submit=form.querySelector('.primary'), status=form.querySelector('[role=status]');
+      const url=seriesPath(lib)+'/'+encodeURIComponent(entry.id);
+      submit.disabled=true;
+      try{
+        const current=await api(url);
+        const payload=Object.fromEntries(['name','description','total_count','status','original_language','url','external_id','external_source'].map(key=>[key,current[key]]));
+        payload.genres=[...new Set(fields.genres.split(',').map(v=>v.trim()).filter(Boolean))];
+        payload.demographic=fields.audience.trim();
+        payload.publication_year=fields.year?Number(fields.year):null;
+        if(Array.isArray(current.tags))payload.tag_ids=current.tags.map(tag=>tag.id);
+        const updated=await api(url,{method:'PUT',body:JSON.stringify(payload)});
+        prefs.value.series[entry.id]={universe:fields.universe.trim(),order:Number(fields.order)||null};
+        prefs.save(); seriesRequest=null;
+        if(form.isConnected&&modal.open)showLiveSeries({entry:updated,lib});
+      }catch(error){status.textContent=error.message;}
+      finally{submit.disabled=false;}
+    };
+  }
+
+  function makeShelfGroups(catalogue,runs,metadata){
+    const byRun=new Map(runs.map(run=>[run.id,run])), groups=new Map(), review=[];
+    const audienceNames=book=>[...(book.raw.genres||[]),...(book.raw.tags||[])].map(item=>item.name||item);
+    for(const book of catalogue){
+      const memberships=(book.raw.series||[]).filter(ref=>byRun.has(ref.series_id));
+      if(memberships.length>1){
+        for(const ref of memberships){
+          const group=groups.get(ref.series_id)||{run:byRun.get(ref.series_id),members:[]};
+          group.conflict=true;group.members.push({book,position:Number(ref.position)});groups.set(ref.series_id,group);
+        }
+      }else{
+        const ref=memberships[0], key=ref?.series_id||'book:'+book.id;
+        const group=groups.get(key)||{run:byRun.get(key),members:[]};
+        group.members.push({book,position:Number(ref?.position)});groups.set(key,group);
+      }
+    }
+    const valid=[];
+    for(const group of groups.values()){
+      const {run,members}=group;
+      group.name=run?.name||members[0].book.title;
+      if(group.conflict){review.push(group.name+': overlapping series memberships');continue;}
+      if(run&&members.length>1&&members.some(item=>!(item.position>0))){
+        review.push(group.name+': missing volume numbers');continue;
+      }
+      members.sort((a,b)=>(a.position||0)-(b.position||0)||a.book.title.localeCompare(b.book.title));
+      const counts=new Map();
+      for(const {book} of members)for(const item of book.raw.genres||[]){
+        const name=item.name||item,key=shelfGenre(name);
+        if(key&&shelfAudience(name)===null)counts.set(key,(counts.get(key)||0)+1);
+      }
+      group.genre=shelfGenre((run?.genres||[]).find(name=>shelfAudience(name)===null))||
+        [...counts].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))[0]?.[0]||'';
+      const audiences=new Set(members.flatMap(({book})=>{
+        const explicit=bookAudienceTag(book.raw.tags);
+        return explicit?[explicit==='ya'?0:1]:audienceNames(book).map(shelfAudience);
+      }).filter(x=>x!==null));
+      group.audience=shelfAudience(run?.demographic)??(audiences.size===1?[...audiences][0]:null);
+      if(!group.genre||group.audience===null){
+        review.push(group.name+': set '+(!group.genre&&group.audience===null?'genre and audience':!group.genre?'a genre':'YA or Adult'));continue;
+      }
+      group.authors=new Set(members.flatMap(({book})=>[...shelfAuthors(book)]));
+      group.meta=metadata[run?.id]||{};
+      valid.push(group);
+    }
+    const grouped=new Set(), blocks=[];
+    for(const group of valid){
+      if(grouped.has(group))continue;
+      const universe=shelfKey(group.meta.universe);
+      // Require an author common to every run. A chain of different
+      // co-authors does not qualify as a shared reading sequence.
+      const peers=universe?[...group.authors].map(author=>valid.filter(other=>!grouped.has(other)&&
+        shelfKey(other.meta.universe)===universe&&other.authors.has(author))).sort((a,b)=>b.length-a.length)[0]||[group]:[group];
+      peers.forEach(peer=>grouped.add(peer));
+      if(peers.length>1){
+        const custom=peers.every(peer=>peer.meta.order>0);
+        const rank=peer=>custom?peer.meta.order:Number(peer.run?.publication_year);
+        if(new Set(peers.map(rank)).size!==peers.length||peers.some(peer=>!(rank(peer)>0))){
+          review.push(group.meta.universe+': set a series order or distinct publication years');continue;
+        }
+        if(peers.some(peer=>peer.genre!==group.genre||peer.audience!==group.audience)){
+          review.push(group.meta.universe+': its series need the same shelf genre and audience to stay in order');continue;
+        }
+        peers.sort((a,b)=>rank(a)-rank(b));
+      }
+      blocks.push({...group,name:peers.length>1?group.meta.universe:group.name,members:peers.flatMap(peer=>peer.members)});
+    }
+    blocks.sort((a,b)=>a.genre.localeCompare(b.genre)||a.audience-b.audience||a.name.localeCompare(b.name));
+    return {blocks,review};
+  }
+  function planPhysicalShelves(catalogue,shelves,runs,prefs,initial,focused){
+    const {blocks,review}=makeShelfGroups(catalogue,runs,prefs.series);
+    const slots=shelves.map((s,index)=>({...s,index,count:s.otherCount||0,genre:s.label,low:2,high:-1}));
+    const indexByCode=new Map(slots.map(slot=>[slot.code,slot.index]));
+    const adjacency=(a,b)=>a.row===b.row&&b.column===a.column+1&&a.column!==4;
+    const layouts=new Map(), steps=[];
+    const note=(block,reason)=>review.push(block.name+': '+reason);
+    const reserve=(slot,block)=>{slot.genre=block.genre;slot.low=Math.min(slot.low,block.audience);slot.high=Math.max(slot.high,block.audience);};
+    const claimed=new Set(blocks.flatMap(block=>block.members.map(member=>member.book.id)));
+    for(const book of catalogue){
+      const index=indexByCode.get(book.shelf);
+      if(index!==undefined){
+        slots[index].count++;
+        if(!claimed.has(book.id))slots[index].unknown=true;
+      }
+    }
+    // Existing placements form anchors during routine shelving. They are
+    // never automatically displaced to make room for an incoming title.
+    if(!initial)for(const block of blocks)for(const {book} of block.members){
+      const index=indexByCode.get(book.shelf);
+      if(index!==undefined){
+        const slot=slots[index];
+        if((slot.genre&&slot.genre!==block.genre)&&slot.label==='')slot.unknown=true;
+        else if(!slot.genre||slot.genre===block.genre)reserve(slot,block);
+      }
+    }
+    for(const block of blocks.filter(block=>initial||!focused||block.members.some(({book})=>book.id===focused))){
+      const pending=block.members.filter(({book})=>initial||!book.shelf);
+      if(!pending.length)continue;
+      const anchors=initial?[]:block.members.map(({book})=>indexByCode.get(book.shelf)).filter(index=>index!==undefined);
+      if(!initial&&block.members.some(({book})=>book.shelf&&!indexByCode.has(book.shelf))){note(block,'existing volumes use shelves outside this plan');continue;}
+      const previous=initial?block.members.map(({book})=>slots[indexByCode.get(book.shelf)]).filter(Boolean):[];
+      previous.forEach(slot=>slot.count--);
+      const occupied=slots.filter(slot=>slot.genre===block.genre);
+      const floor=Math.max(-1,...occupied.filter(slot=>slot.high<block.audience&&slot.high>=0).map(slot=>slot.index));
+      const ceiling=Math.min(slots.length,...occupied.filter(slot=>slot.low>block.audience&&slot.low<2).map(slot=>slot.index));
+      const attempts=[];
+      for(const start of slots){
+        if(start.index<floor||start.index>ceiling)continue;
+        let cursor=0;const chosen=[], consumed=new Map();
+        for(let i=start.index;i<slots.length&&cursor<block.members.length;i++){
+          const slot=slots[i];
+          if(i>ceiling||(i>start.index&&!adjacency(slots[i-1],slot))||
+            (slot.genre&&slot.genre!==block.genre)||slot.unknown||slot.high>block.audience)break;
+          const before=cursor;
+          while(cursor<block.members.length){
+            const book=block.members[cursor].book;
+            const fixed=!initial&&book.shelf?indexByCode.get(book.shelf):undefined;
+            if(fixed!==undefined){
+              if(fixed!==i)break;
+              chosen.push([book,slot]);cursor++;continue;
+            }
+            const used=consumed.get(i)||0;
+            if(slot.count+used>=slot.capacity)break;
+            const nextAnchor=!initial&&block.members.slice(cursor+1).find(({book})=>book.shelf);
+            if(nextAnchor&&indexByCode.get(nextAnchor.book.shelf)<i)break;
+            consumed.set(i,used+1);chosen.push([book,slot]);cursor++;
+          }
+          if(cursor===before)break;
+        }
+        if(cursor===block.members.length&&anchors.every(index=>chosen.some(([,slot])=>slot.index===index)))
+          attempts.push({chosen,consumed,start,span:consumed.size,blank:chosen.filter(([,slot])=>!slot.label).length});
+      }
+      attempts.sort((a,b)=>a.blank-b.blank||a.start.index-b.start.index);
+      const fit=attempts[0];
+      if(!fit){previous.forEach(slot=>slot.count++);note(block,'no suitable space without splitting it or shifting another book');continue;}
+      for(const [book,slot] of fit.chosen){
+        reserve(slot,block);
+        const line=layouts.get(slot.code)||[];
+        line.push(book);layouts.set(slot.code,line);
+        if(book.shelf!==slot.code)steps.push({book,to:slot.code,block:block.name,audience:block.audience});
+      }
+      for(const [i,count] of fit.consumed)slots[i].count+=count;
+    }
+    return {steps,review,layouts};
+  }
+
+  function plannerShelves(lib,prefs){
+    const libraryCodes=new Set((state.shelves.get(lib.id)||[]).map(s=>String(s.name).toUpperCase()));
+    const result=[], maxRows=Math.max(...Object.values(labels).map(ls=>ls.length));
+    for(let row=1;row<=maxRows;row++)for(const [column,letter] of [...caseOrder].entries()){
+      const code=letter+row;
+      if(row>labels[letter].length||!libraryCodes.has(code)||isNon(code))continue;
+      const capacity=Number(prefs.capacity[code]??custom[code]?.capacity??17);
+      result.push({code,row,column,capacity,label:shelfGenre(shelfLabel(code)),
+        otherCount:books.filter(book=>book.libraryId!==lib.id&&book.shelf===code).length});
+    }
+    return result;
+  }
+  function openShelfPlanner({bookId='',libraryId=''}={}){
+    if(!state.loaded){toast('Sign in to use Auto shelf.');return;}
+    const lib=state.libraries.find(l=>l.id===libraryId)||state.libraries.find(l=>l.name==='Book Hoard');
+    if(!lib){toast('Book Hoard is not available in this account.');return;}
+    const prefs=shelfPrefs(lib);
+    show(`<h2>Auto shelf · ${esc(lib.name)}</h2><p>Preview the first organisation, or find a place for an unshelved book. Confirm each physical move individually.</p>
+      <div class="actions"><button id="initialShelfPlan" type="button">Preview initial organisation</button>
+      <button id="nextShelfBook" type="button" class="primary">Find a shelf for one book</button></div>
+      <details class="newBookSection"><summary>Shelf capacity</summary><p>17 is the starting estimate. Update any shelf after checking how many books actually fit.</p>
+        <form id="shelfCapacityForm" class="shelfPlannerForm"><label>Shelf<select name="code"></select></label>
+        <label>Book capacity<input type="number" name="capacity" min="0" max="200" required></label>
+        <button type="submit">Save capacity</button></form></details>
+      <div id="shelfPlanOutput" aria-live="polite"></div>`);
+    const panel=document.getElementById('shelfPlanOutput'), capacityForm=document.getElementById('shelfCapacityForm');
+    const initialButton=document.getElementById('initialShelfPlan'), nextButton=document.getElementById('nextShelfBook');
+    const shelfSelect=capacityForm.elements.code;
+    const shelves=()=>plannerShelves(lib,prefs.value);
+    shelfSelect.append(...shelves().map(s=>new Option(s.code+' · '+(shelfLabel(s.code)||'Unlabelled'),s.code)));
+    function displayCapacity(){capacityForm.elements.capacity.value=shelves().find(s=>s.code===shelfSelect.value)?.capacity??'';}
+    shelfSelect.addEventListener('change',displayCapacity);displayCapacity();
+    let runs=null,busy=false,initial=false,plan=null,focus=bookId,lastMessage='';
+    const catalogue=()=>books.filter(book=>book.libraryId===lib.id);
+    const getCount=code=>books.filter(book=>book.shelf===code).length;
+    function renderPlan(){
+      if(!panel.isConnected||!modal.open||!plan)return;
+      const remaining=plan.steps.filter(step=>catalogue().some(b=>b.id===step.book.id&&b.shelf!==step.to));
+      const byCode=new Map(shelves().map(s=>[s.code,s]));
+      const ready=remaining.find(step=>getCount(step.to)<(byCode.get(step.to)?.capacity??0));
+      const step=ready||remaining[0];
+      const current=step&&catalogue().find(b=>b.id===step.book.id);
+      const layout=step?(plan.layouts.get(step.to)||[]):[], at=step?layout.findIndex(b=>b.id===step.book.id):-1;
+      const neighbors=step?layout.slice(0,at).reverse().find(b=>catalogue().find(item=>item.id===b.id)?.shelf===step.to):null;
+      const following=step?layout.slice(at+1).find(b=>catalogue().find(item=>item.id===b.id)?.shelf===step.to):null;
+      panel.innerHTML=`${lastMessage?`<p role="status">${esc(lastMessage)}</p>`:''}
+        <p><strong>${initial?'Initial organisation preview':'One book at a time'}</strong> · ${remaining.length} proposed ${remaining.length===1?'move':'moves'}</p>
+        ${step?`<section class="newBookSection shelfMoveCard"><h3>${esc(current.title)}</h3><p>${esc(step.block===current.title?'':step.block+' · ')}${step.audience===0?'YA':'Adult'} · ${esc(current.shelf||'Unshelved')} → <strong>${esc(step.to)}</strong></p>
+          <p>${getCount(step.to)} books recorded on ${esc(step.to)} · estimated capacity ${byCode.get(step.to)?.capacity??'unknown'}</p>
+          ${neighbors?`<p>Place after <strong>${esc(neighbors.title)}</strong>.</p>`:following?`<p>Place before <strong>${esc(following.title)}</strong>.</p>`:''}
+          ${!ready?'<p>No proposed destination currently has recorded room. Check its real capacity or adjust the plan.</p>':''}
+          <div class="actions"><button type="button" data-full>Shelf is full</button><button type="button" data-confirm class="primary" ${ready?'':'disabled'}>Confirm this move</button></div></section>`:
+          '<p>No move is ready. Check the reading order and review items below.</p>'}
+        ${initial&&remaining.length?`<details class="newBookSection"><summary>Preview all proposed moves</summary><ol>${remaining.map(item=>`<li>${esc(item.book.title)} → ${esc(item.to)}</li>`).join('')}</ol></details>`:''}
+        ${initial&&plan.layouts.size?`<details class="newBookSection"><summary>Reading order on each shelf</summary>${[...plan.layouts].map(([code,titles])=>`<h3>Shelf ${esc(code)}</h3><ol>${titles.map(book=>`<li>${esc(book.title)}</li>`).join('')}</ol>`).join('')}</details>`:''}
+        ${plan.review.length?`<details class="newBookSection" ${!step?'open':''}><summary>Needs review (${plan.review.length})</summary><ul>${plan.review.map(reason=>`<li>${esc(reason)}</li>`).join('')}</ul></details>`:''}`;
+      panel.querySelector('[data-full]')?.addEventListener('click',()=>{
+        prefs.value.capacity[step.to]=getCount(step.to);
+        prefs.save(); displayCapacity();
+        lastMessage='Marked '+step.to+' full at '+getCount(step.to)+' books. No books moved.';
+        if(!initial)focus=current.id;
+        calculate();
+      });
+      panel.querySelector('[data-confirm]')?.addEventListener('click',async()=>{
+        if(busy)return;
+        busy=true;
+        panel.querySelectorAll('button').forEach(button=>button.disabled=true);
+        initialButton.disabled=nextButton.disabled=true;
+        try{
+          await setShelf(current,step.to);
+          current.shelf=step.to;
+          await loadLive();
+          lastMessage='Moved '+current.title+' to '+step.to+'.';
+          if(initial)renderPlan();
+          else{plan=null;panel.textContent=lastMessage+' Choose “Find a shelf for one book” when you’re ready.';}
+        }catch(error){lastMessage=error.message;renderPlan();}
+        finally{busy=false;initialButton.disabled=nextButton.disabled=false;}
+      });
+    }
+    async function calculate(){
+      if(busy)return;
+      busy=true;initialButton.disabled=nextButton.disabled=true;
+      panel.textContent='Checking shelf space and series order…';
+      try{
+        if(!runs)runs=requireList(await api(seriesPath(lib)));
+        const available=shelves(), titles=catalogue();
+        if(!available.length)throw Error('No physical shelves are set up in this library.');
+        if(!initial&&!focus){
+          // Find the first book with a safe placement, without reserving space
+          // for subsequent books or moving anything already on a shelf.
+          const trial=planPhysicalShelves(titles,available,runs,prefs.value,false);
+          focus=trial.steps[0]?.book.id||'';
+          plan=focus?planPhysicalShelves(titles,available,runs,prefs.value,false,focus):trial;
+        }else plan=planPhysicalShelves(titles,available,runs,prefs.value,initial,focus);
+        if(!initial)plan.steps=plan.steps.filter(step=>step.book.id===focus).slice(0,1);
+        renderPlan();
+      }catch(error){panel.textContent=error.message;}
+      finally{busy=false;initialButton.disabled=nextButton.disabled=false;}
+    }
+    initialButton.onclick=()=>{initial=true;focus='';lastMessage='';calculate();};
+    nextButton.onclick=()=>{initial=false;focus='';lastMessage='';calculate();};
+    capacityForm.onsubmit=event=>{
+      event.preventDefault();
+      if(busy||!shelfSelect.value)return;
+      prefs.value.capacity[shelfSelect.value]=Number(capacityForm.elements.capacity.value);
+      prefs.save();lastMessage='Saved capacity for '+shelfSelect.value+'.';
+      if(plan)calculate();else panel.textContent=lastMessage;
+    };
+    if(bookId)calculate();
+  }
+  window.openShelfPlanner=openShelfPlanner;
 
   const baseComplete = window.completeSortMove;
   window.completeSortMove = async function (id, checked) {
