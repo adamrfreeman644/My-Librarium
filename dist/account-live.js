@@ -1592,6 +1592,68 @@
     return {steps,review,layouts};
   }
 
+  // Positions describe the physical shelf across collections, not catalogue ownership.
+  const physicalBookKey=book=>book.libraryId+':'+book.id;
+  const physicalShelfBooks=code=>books.filter(book=>book.shelf===code);
+  function physicalOrder(code){
+    const current=physicalShelfBooks(code), available=new Map(current.map(book=>[physicalBookKey(book),book]));
+    let saved=[];
+    try{const raw=JSON.parse(localStorage.getItem('librarium-physical-order-v1:'+code)||'[]');if(Array.isArray(raw))saved=raw;}catch{}
+    const ordered=[...new Set(saved)].filter(key=>available.has(key)).map(key=>available.get(key));
+    const known=new Set(ordered.map(physicalBookKey));
+    return {ordered,unknown:current.filter(book=>!known.has(physicalBookKey(book)))};
+  }
+  function savePhysicalOrder(code,ordered){
+    localStorage.setItem('librarium-physical-order-v1:'+code,JSON.stringify(ordered.map(physicalBookKey)));
+  }
+  function recordPhysicalPlacement(code,book,after,before){
+    const {ordered,unknown}=physicalOrder(code);
+    if(unknown.some(item=>physicalBookKey(item)!==physicalBookKey(book)))return;
+    const next=ordered.filter(item=>physicalBookKey(item)!==physicalBookKey(book));
+    const afterIndex=after?next.findIndex(item=>physicalBookKey(item)===physicalBookKey(after)):-1;
+    const beforeIndex=before?next.findIndex(item=>physicalBookKey(item)===physicalBookKey(before)):-1;
+    next.splice(beforeIndex>=0?beforeIndex:afterIndex>=0?afterIndex+1:next.length,0,book);
+    savePhysicalOrder(code,next);
+  }
+  function editPhysicalOrder(code,done=()=>openShelf(code)){
+    const {ordered,unknown}=physicalOrder(code);
+    const list=[...ordered,...unknown];
+    show(`<h2>Shelf ${esc(code)} · Book positions</h2><p>Arrange titles from left to right as they physically sit. This order is saved in this browser.</p>
+      ${unknown.length?'<p>Unrecorded books are listed after any saved positions. Check the order before saving.</p>':''}
+      <ol id="physicalPositionList" class="physicalPositionList"></ol>
+      <div class="actions"><button id="positionBack" type="button">Back</button><button id="savePhysicalPosition" class="primary" type="button">Save shelf positions</button></div>`);
+    const el=document.getElementById('physicalPositionList');
+    function renderList(focus,dir){
+      el.innerHTML=list.map((book,index)=>`<li><span><strong>${esc(book.title)}</strong> · ${esc(book.owner)}</span>
+        <span><button type="button" data-index="${index}" data-dir="-1" aria-label="Move ${esc(book.title)} earlier" ${index?'':'disabled'}>↑</button>
+        <button type="button" data-index="${index}" data-dir="1" aria-label="Move ${esc(book.title)} later" ${index<list.length-1?'':'disabled'}>↓</button></span></li>`).join('');
+      if(focus!==undefined)(el.querySelector(`[data-index="${focus}"][data-dir="${dir}"]:not(:disabled)`)||
+        el.querySelector(`[data-index="${focus}"]:not(:disabled)`))?.focus({preventScroll:true});
+    }
+    el.onclick=event=>{
+      const button=event.target.closest('[data-index]');if(!button)return;
+      const from=Number(button.dataset.index),dir=Number(button.dataset.dir),to=from+dir;
+      if(to>=0&&to<list.length){[list[from],list[to]]=[list[to],list[from]];renderList(to,dir);}
+    };
+    renderList();
+    document.getElementById('positionBack').onclick=done;
+    document.getElementById('savePhysicalPosition').onclick=()=>{savePhysicalOrder(code,list);done();};
+  }
+  const baseOpenShelf=window.openShelf;
+  window.openShelf=function(code){
+    baseOpenShelf(code);
+    if(!state.loaded||isNon(code))return;
+    const {ordered,unknown}=physicalOrder(code);
+    const actions=modal.querySelector('.actions'), button=document.createElement('button');
+    button.type='button';button.textContent='Book positions';button.onclick=()=>editPhysicalOrder(code);
+    actions.prepend(button);
+    if(ordered.length){
+      const summary=document.createElement('p');
+      summary.textContent=unknown.length?'Some shelf positions are unrecorded.':'End book: '+ordered.at(-1).title;
+      actions.before(summary);
+    }
+  };
+
   function plannerShelves(lib,prefs){
     const libraryCodes=new Set((state.shelves.get(lib.id)||[]).map(s=>String(s.name).toUpperCase()));
     const result=[], maxRows=Math.max(...Object.values(labels).map(ls=>ls.length));
@@ -1604,7 +1666,7 @@
     }
     return result;
   }
-  function openShelfPlanner({bookId='',libraryId=''}={}){
+  function openShelfPlanner({bookId='',libraryId='',fullTarget='',initialMode=false}={}){
     if(!state.loaded){toast('Sign in to use Auto shelf.');return;}
     const lib=state.libraries.find(l=>l.id===libraryId)||state.libraries.find(l=>l.name==='Book Hoard');
     if(!lib){toast('Book Hoard is not available in this account.');return;}
@@ -1624,7 +1686,7 @@
     shelfSelect.append(...shelves().map(s=>new Option(s.code+' · '+(shelfLabel(s.code)||'Unlabelled'),s.code)));
     function displayCapacity(){capacityForm.elements.capacity.value=shelves().find(s=>s.code===shelfSelect.value)?.capacity??'';}
     shelfSelect.addEventListener('change',displayCapacity);displayCapacity();
-    let runs=null,busy=false,initial=false,plan=null,focus=bookId,lastMessage='';
+    let runs=null,busy=false,initial=initialMode,plan=null,focus=bookId,lastMessage='',heldStep=null;
     const catalogue=()=>books.filter(book=>book.libraryId===lib.id);
     const getCount=code=>books.filter(book=>book.shelf===code).length;
     function renderPlan(){
@@ -1632,7 +1694,8 @@
       const remaining=plan.steps.filter(step=>catalogue().some(b=>b.id===step.book.id&&b.shelf!==step.to));
       const byCode=new Map(shelves().map(s=>[s.code,s]));
       const ready=remaining.find(step=>getCount(step.to)<(byCode.get(step.to)?.capacity??0));
-      const step=ready||remaining[0];
+      const step=(heldStep&&remaining.find(item=>item.book.id===heldStep.book.id&&item.to===heldStep.to))||ready||remaining[0];
+      const stepReady=step&&getCount(step.to)<(byCode.get(step.to)?.capacity??0);
       const current=step&&catalogue().find(b=>b.id===step.book.id);
       const layout=step?(plan.layouts.get(step.to)||[]):[], at=step?layout.findIndex(b=>b.id===step.book.id):-1;
       const neighbors=step?layout.slice(0,at).reverse().find(b=>catalogue().find(item=>item.id===b.id)?.shelf===step.to):null;
@@ -1642,8 +1705,8 @@
         ${step?`<section class="newBookSection shelfMoveCard"><h3>${esc(current.title)}</h3><p>${esc(step.block===current.title?'':step.block+' · ')}${step.audience===0?'YA':'Adult'} · ${esc(current.shelf||'Unshelved')} → <strong>${esc(step.to)}</strong></p>
           <p>${getCount(step.to)} books recorded on ${esc(step.to)} · estimated capacity ${byCode.get(step.to)?.capacity??'unknown'}</p>
           ${neighbors?`<p>Place after <strong>${esc(neighbors.title)}</strong>.</p>`:following?`<p>Place before <strong>${esc(following.title)}</strong>.</p>`:''}
-          ${!ready?'<p>No proposed destination currently has recorded room. Check its real capacity or adjust the plan.</p>':''}
-          <div class="actions"><button type="button" data-full>Shelf is full</button><button type="button" data-confirm class="primary" ${ready?'':'disabled'}>Confirm this move</button></div></section>`:
+          ${!stepReady?'<p>This shelf has no recorded room. Check its real capacity or move its end book first.</p>':''}
+          <div class="actions"><button type="button" data-full>Shelf is full</button><button type="button" data-confirm class="primary" ${stepReady?'':'disabled'}>Confirm this move</button></div></section>`:
           '<p>No move is ready. Check the reading order and review items below.</p>'}
         ${initial&&remaining.length?`<details class="newBookSection"><summary>Preview all proposed moves</summary><ol>${remaining.map(item=>`<li>${esc(item.book.title)} → ${esc(item.to)}</li>`).join('')}</ol></details>`:''}
         ${initial&&plan.layouts.size?`<details class="newBookSection"><summary>Reading order on each shelf</summary>${[...plan.layouts].map(([code,titles])=>`<h3>Shelf ${esc(code)}</h3><ol>${titles.map(book=>`<li>${esc(book.title)}</li>`).join('')}</ol>`).join('')}</details>`:''}
@@ -1654,13 +1717,7 @@
         if(item.run)editSeriesShelving(item.run,lib);
         else if(item.book)openBook(item.book.id,'',lib.id);
       });
-      panel.querySelector('[data-full]')?.addEventListener('click',()=>{
-        prefs.value.capacity[step.to]=getCount(step.to);
-        prefs.save(); displayCapacity();
-        lastMessage='Marked '+step.to+' full at '+getCount(step.to)+' books. No books moved.';
-        if(!initial)focus=current.id;
-        calculate();
-      });
+      panel.querySelector('[data-full]')?.addEventListener('click',()=>showEndMove(step));
       panel.querySelector('[data-confirm]')?.addEventListener('click',async()=>{
         if(busy)return;
         busy=true;
@@ -1668,6 +1725,8 @@
         initialButton.disabled=nextButton.disabled=true;
         try{
           await setShelf(current,step.to);
+          recordPhysicalPlacement(step.to,current,neighbors,following);
+          heldStep=null;
           current.shelf=step.to;
           await loadLive();
           lastMessage='Moved '+current.title+' to '+step.to+'.';
@@ -1676,6 +1735,68 @@
         }catch(error){lastMessage=error.message;renderPlan();}
         finally{busy=false;initialButton.disabled=nextButton.disabled=false;}
       });
+    }
+    function showEndMove(incoming){
+      if(busy)return;
+      heldStep=incoming;
+      const {ordered,unknown}=physicalOrder(incoming.to), end=ordered.at(-1);
+      const count=getCount(incoming.to);
+      if(!count){lastMessage='No books are recorded on '+incoming.to+'. Assign the physical end book to this shelf first.';renderPlan();return;}
+      if(unknown.length){
+        panel.innerHTML=`<p>The end book on ${esc(incoming.to)} is not verified. Record the shelf’s left-to-right order before moving anything.</p>
+          <div class="actions"><button type="button" data-back>Back</button><button type="button" data-positions class="primary">Record shelf positions</button></div>`;
+        panel.querySelector('[data-back]').onclick=renderPlan;
+        panel.querySelector('[data-positions]').onclick=()=>editPhysicalOrder(incoming.to,()=>{
+          openShelfPlanner({bookId:incoming.book.id,libraryId:lib.id,fullTarget:incoming.to,initialMode:initial});
+        });
+        return;
+      }
+      if(!end)return;
+      if(end.libraryId!==lib.id){
+        lastMessage=end.title+' belongs to '+end.owner+'. Its placement needs to be reviewed in that library; nothing moved.';
+        renderPlan();return;
+      }
+      prefs.value.capacity[incoming.to]=count;
+      prefs.save();displayCapacity();
+      const available=shelves().map(slot=>slot.code===incoming.to?{...slot,capacity:Math.max(0,count-1)}:slot);
+      const simulated=catalogue().map(book=>book.id===end.id?{...book,shelf:null}:book);
+      const alternative=planPhysicalShelves(simulated,available,runs,prefs.value,false,end.id);
+      const move=alternative.steps.find(item=>item.book.id===end.id&&item.to!==incoming.to);
+      if(!move){
+        lastMessage='No safe alternative for '+end.title+' without breaking shelf or series order. Nothing moved.';
+        renderPlan();return;
+      }
+      const layout=alternative.layouts.get(move.to)||[], index=layout.findIndex(book=>book.id===end.id);
+      const before=layout.slice(index+1).find(book=>book.shelf===move.to);
+      const after=layout.slice(0,index).reverse().find(book=>book.shelf===move.to);
+      panel.innerHTML=`<section class="newBookSection shelfMoveCard"><h3>Move the end book</h3>
+        <p><strong>${esc(end.title)}</strong> · ${esc(incoming.to)} → <strong>${esc(move.to)}</strong></p>
+        <p>${esc(incoming.book.title)} keeps its spot on ${esc(incoming.to)}. Confirm that placement separately after moving the end book.</p>
+        ${before?`<p>Place before ${esc(before.title)}.</p>`:after?`<p>Place after ${esc(after.title)}.</p>`:''}
+        <div class="actions"><button type="button" data-back>Back</button><button type="button" data-end-confirm class="primary">Confirm end book move</button></div></section>`;
+      panel.querySelector('[data-back]').onclick=renderPlan;
+      panel.querySelector('[data-end-confirm]').onclick=async event=>{
+        if(busy)return;
+        busy=true;event.currentTarget.disabled=true;
+        initialButton.disabled=nextButton.disabled=true;
+        try{
+          const latest=physicalOrder(incoming.to);
+          if(latest.unknown.length||physicalBookKey(latest.ordered.at(-1)||{})!==physicalBookKey(end))
+            throw Error('The end book changed. Check the shelf positions again.');
+          if(getCount(move.to)>=(shelves().find(slot=>slot.code===move.to)?.capacity??0))
+            throw Error('The destination is full. Check its actual capacity first.');
+          await setShelf(end,move.to);
+          recordPhysicalPlacement(move.to,end,after,before);
+          savePhysicalOrder(incoming.to,latest.ordered.slice(0,-1));
+          end.shelf=move.to;
+          // Do not let the initial preview immediately send the moved end book back.
+          plan.steps=plan.steps.filter(item=>item.book.id!==end.id);
+          await loadLive();
+          lastMessage='Moved '+end.title+' to '+move.to+'. Confirm the incoming book separately.';
+          renderPlan();
+        }catch(error){lastMessage=error.message;renderPlan();}
+        finally{busy=false;initialButton.disabled=nextButton.disabled=false;}
+      };
     }
     async function calculate(){
       if(busy)return;
@@ -1694,11 +1815,17 @@
         }else plan=planPhysicalShelves(titles,available,runs,prefs.value,initial,focus);
         if(!initial)plan.steps=plan.steps.filter(step=>step.book.id===focus).slice(0,1);
         renderPlan();
+        if(fullTarget){
+          const target=fullTarget;fullTarget='';
+          const incoming=plan.steps.find(item=>item.book.id===focus&&item.to===target);
+          if(incoming){busy=false;showEndMove(incoming);}
+          else{lastMessage='The plan changed. Review the current suggestion before moving an end book.';renderPlan();}
+        }
       }catch(error){panel.textContent=error.message;}
       finally{busy=false;initialButton.disabled=nextButton.disabled=false;}
     }
-    initialButton.onclick=()=>{initial=true;focus='';lastMessage='';calculate();};
-    nextButton.onclick=()=>{initial=false;focus='';lastMessage='';calculate();};
+    initialButton.onclick=()=>{initial=true;focus='';heldStep=null;lastMessage='';calculate();};
+    nextButton.onclick=()=>{initial=false;focus='';heldStep=null;lastMessage='';calculate();};
     capacityForm.onsubmit=event=>{
       event.preventDefault();
       if(busy||!shelfSelect.value)return;
