@@ -157,11 +157,15 @@
 
   async function allBooks(lib) {
     const result = [];
+    let scanned=0;
     for (let page = 1; ; page++) {
       const data = await api(`/libraries/${encodeURIComponent(lib.id)}/books?page=${page}&per_page=100`);
       const items = Array.isArray(data) ? data : (data.items || []);
-      result.push(...items.map(b => normaliseBook(b, lib)));
-      if (!items.length || Array.isArray(data) || (Number.isFinite(data.total) ? result.length >= data.total : items.length < (data.per_page || 100))) break;
+      scanned+=items.length;
+      // The library endpoint includes series gaps and other unowned works.
+      // Preserve older API responses that did not send an ownership status.
+      result.push(...items.filter(b => !b.ownership || b.ownership === 'shelf').map(b => normaliseBook(b, lib)));
+      if (!items.length || Array.isArray(data) || (Number.isFinite(data.total) ? scanned >= data.total : items.length < (data.per_page || 100))) break;
     }
     return result;
   }
@@ -399,7 +403,7 @@
       const tiles = seriesTiles(linked, known, entry.total_count);
       panel.innerHTML = tiles.length ? `<div class="seriesVolumes">${tiles.map((volume, index) => {
         const book = byID.get(volume.book_id);
-        const held = volume.held ?? Boolean(book);
+        const held = Boolean(book) && volume.held !== false;
         const number = volume.position > 0
           ? `Vol. ${volume.position}${volume.position_end > volume.position ? `–${volume.position_end}` : ''}`
           : '';
