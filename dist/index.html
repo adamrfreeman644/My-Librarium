@@ -148,6 +148,12 @@ dialog .rowbook>div{flex:1 1 0}
 @media(max-width:760px){
  #bookForm:has(.newBookLookup) :is(.bookDetailsFields,.bookPlacement,.newBookClassifications,.newBookEditionFields){grid-template-columns:minmax(0,1fr)}
 }
+/* Open bookcases show the page behind the shelves, in either theme. */
+.casecarousel .top-open .shelves{background:none;box-shadow:none}
+.casecarousel .top-open .shelves:after{display:none}
+.casecarousel .case.top-open .shelf:first-child{background:transparent!important;color:var(--ink);box-shadow:none}
+.casecarousel .top-open .shelf:first-child strong{text-shadow:none}
+.casecarousel .top-open .shelf:first-child .code,.casecarousel .top-open .shelf:first-child small{opacity:1}
 </style><aside><div class="brand">▥ Librarium<small>A PLACE FOR EVERY BOOK</small></div><nav><button id="nav-shelves" onclick="setView('shelves')">▦ &nbsp; Shelf map</button><button id="nav-books" onclick="setView('books')">▤ &nbsp; All books</button><button id="nav-series" onclick="setView('series')">▥ &nbsp; Book series</button></nav><details class="accountSettings"><summary>Settings</summary><a id="seriesReviewLink" href="/series-review/" hidden>Series review and combine</a><button id="accountAction" type="button" onclick="this.closest('details').open=false" disabled>Log in</button></details><div class="asideFoot">LIBRARIUM</div></aside><main><div class="top"><div class="searchTools"><input class="search" id="search" placeholder="⌕  Find a title, author or shelf…" oninput="render()"><details class="bookFilters" id="bookFilters" hidden><summary>Filters<span id="bookFilterCount" hidden></span></summary><div class="bookFilterMenu">
   <fieldset><legend>Series status</legend>
     <label><input type="checkbox" name="seriesStatus" value="linked" checked> In a series</label>
