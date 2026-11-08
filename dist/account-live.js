@@ -521,12 +521,11 @@
     </section>`;
   }
   function newBookExtraFields() {
-    return `<details class="newBookSection" open><summary>Genres, tags and lists</summary>
+    return `<details class="newBookSection" open><summary>Genres and tags</summary>
       <div class="newBookClassifications">
         <fieldset><legend>Genres</legend><input id="newBookGenresSearch" type="search" placeholder="Search genres" aria-label="Search genres"><div id="newBookGenres" class="bookCheckList searchableChecks">Loading genres…</div><p id="newBookGenresCount" class="pickerCount" role="status"></p><button id="newBookGenresMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>
         <fieldset><legend>Tags</legend><div id="newBookTags" class="bookCheckList">Loading tags…</div>
           <label>New tag (optional)<input name="newTag" maxlength="80"></label></fieldset>
-        <fieldset><legend>Lists</legend><input id="newBookListsSearch" type="search" placeholder="Search lists" aria-label="Search lists"><div id="newBookLists" class="bookCheckList searchableChecks">Loading lists…</div><p id="newBookListsCount" class="pickerCount" role="status"></p><button id="newBookListsMore" class="pickerMore" type="button" hidden>Show more</button></fieldset>
       </div>
     </details>
     <details class="newBookSection"><summary>Additional contributors</summary>
@@ -578,7 +577,7 @@
 
   function setupNewBookFields(form) {
     const input=form.querySelector('#newBookLookup'),status=form.querySelector('#newBookLookupStatus'),results=form.querySelector('#newBookLookupResults');
-    const genreBox=form.querySelector('#newBookGenres'),tagBox=form.querySelector('#newBookTags'),listBox=form.querySelector('#newBookLists');
+    const genreBox=form.querySelector('#newBookGenres'),tagBox=form.querySelector('#newBookTags');
     const edition=form.querySelector('#newBookEdition');
     const contributorRows=form.querySelector('#newBookContributors');
     let tagsRevision=0,lookupRevision=0,genres=[];
@@ -616,14 +615,9 @@
       more.addEventListener('click',()=>{limit+=12;update();});
       return update;
     }
-    const updateGenres=searchablePicker(genreBox), updateLists=searchablePicker(listBox);
-    function loadOptions(path,container,name,transform=value=>value,updated=()=>{}){
-      api(path).then(value=>{if(form.isConnected){renderChecks(container,requireList(transform(value)),name);updated();}})
-        .catch(()=>{if(form.isConnected)container.textContent='Could not load options.';});
-    }
+    const updateGenres=searchablePicker(genreBox);
     api('/genres').then(value=>{genres=requireList(value);if(form.isConnected){renderChecks(genreBox,genres,'genreId');updateGenres();}})
       .catch(()=>{if(form.isConnected)genreBox.textContent='Could not load genres.';});
-    loadOptions('/me/lists',listBox,'listId',value=>(Array.isArray(value)?value:value.items||[]).filter(l=>l.kind==='manual'),updateLists);
     async function loadTags(){
       const rev=++tagsRevision, lib=form.elements.libraryId.value;
       tagBox.textContent='Loading tags…';
@@ -1252,8 +1246,6 @@
         if(data.importCover==='on'&&form.dataset.lookupCover)sideEffects.push(api(
           `/libraries/${encodeURIComponent(lib.id)}/books/${encodeURIComponent(created.id)}/cover/fetch`,
           {method:'POST',body:JSON.stringify({url:form.dataset.lookupCover})}));
-        for(const listId of fields.getAll('listId'))sideEffects.push(api(
-          `/me/lists/${encodeURIComponent(listId)}/books/${encodeURIComponent(created.id)}`,{method:'POST'}));
         const followUp=await Promise.allSettled(sideEffects);
         if(followUp.some(r=>r.status==='rejected'))throw Error('Some optional details could not be applied.');
         owner=lib.name;
