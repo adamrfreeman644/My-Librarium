@@ -148,9 +148,7 @@ dialog .rowbook>div{flex:1 1 0}
 @media(max-width:760px){
  #bookForm:has(.newBookLookup) :is(.bookDetailsFields,.bookPlacement,.newBookClassifications,.newBookEditionFields){grid-template-columns:minmax(0,1fr)}
 }
-/* Open bookcases show the page behind the shelves, in either theme. */
-.casecarousel .top-open .shelves{background:none;box-shadow:none}
-.casecarousel .top-open .shelves:after{display:none}
+/* Only the open top shelf shows the page behind it. */
 .casecarousel .case.top-open .shelf:first-child{background:transparent!important;color:var(--ink);box-shadow:none}
 .casecarousel .top-open .shelf:first-child strong{text-shadow:none}
 .casecarousel .top-open .shelf:first-child .code,.casecarousel .top-open .shelf:first-child small{opacity:1}
