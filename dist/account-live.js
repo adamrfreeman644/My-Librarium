@@ -471,6 +471,7 @@
               : `<label>Library<select name="libraryId">${libs}</select></label>`}
           <label>Physical shelf<select name="shelf">${shelfOptions(b?.shelf || shelf)}</select></label>
         </div>
+        ${!b ? '<label>Media type<select name="mediaTypeId" required disabled><option value="">Loading media types…</option></select></label>' : ''}
         ${b && state.libraries.length > 1 ? '<div><button id="moveBookButton" type="button">Move to another library</button></div>' : ''}
         ${b ? `<label class="standaloneOption"><input id="standaloneBook" name="standalone" type="checkbox" ${b.standalone?'checked':''} ${b.raw.series?.length?'disabled':''}> Mark as standalone</label>
           <p class="standaloneHint">${b.raw.series?.length?'This book already belongs to a series.':'Standalone books are skipped in Series Review.'}</p>` : ''}
@@ -501,10 +502,26 @@
         <button id="addBookToSeries" type="button" disabled>Add to series</button><p id="editSeriesMessage" role="status"></p>
       </fieldset>` : ''}
       </div>
+      <p id="bookSaveStatus" role="status"></p>
       <div class="actions">${b ? `<button type="button" class="danger" onclick="confirmDelete('${b.id}','${b.libraryId}')">Remove from library</button>` : ''}<button type="button" onclick="modal.close()">Cancel</button><button class="primary">Save to Librarium</button></div></form>`);
     document.getElementById('moveBookButton')?.addEventListener('click', () => showMoveBook(b));
     if (b) setupBookSeries(b);
+    else loadBookMediaTypes(document.getElementById('bookForm'));
   };
+
+  async function loadBookMediaTypes(form) {
+    const select=form.elements.mediaTypeId, submit=form.querySelector('button.primary');
+    const status=form.querySelector('#bookSaveStatus');
+    submit.disabled=true;
+    try{
+      const types=requireList(await api('/media-types')).filter(t=>t?.id&&t.name);
+      const preferred=types.find(t=>/^(novel|book|books)$/i.test(t.name));
+      select.replaceChildren(new Option('Choose a media type',''),...types.map(t=>new Option(t.display_name||t.name,t.id)));
+      if(preferred)select.value=preferred.id;
+      if(!types.length)throw Error('No media types are configured in Librarium.');
+      select.disabled=submit.disabled=false;
+    }catch(e){status.textContent='Could not load media types. '+e.message;}
+  }
 
   function suggestSeriesByAuthor(book, available) {
     const authors = item => (item.raw?.contributors || []).filter(c => !c.role || c.role === 'author');
@@ -957,7 +974,13 @@
   }
 
   window.saveBook = async function (id) {
-    const form = document.getElementById('bookForm'); const data = Object.fromEntries(new FormData(form));
+    const form = document.getElementById('bookForm');
+    if(!form||form.dataset.saving==='true')return;
+    const data = Object.fromEntries(new FormData(form));
+    const status=form.querySelector('#bookSaveStatus'), submit=form.querySelector('.actions button.primary');
+    if(!id&&!data.mediaTypeId){status.textContent='Choose a media type first.';return;}
+    form.dataset.saving='true';submit.disabled=true;status.textContent='Saving…';
+    let createdBook=false;
     try {
       if (id) {
         const book = books.find(b => b.id === id && b.libraryId === form.dataset.libraryId);
@@ -979,14 +1002,29 @@
         await api(bookPath, { method: 'PUT', body: JSON.stringify({ title: data.title.trim(), subtitle: raw.subtitle || '', description: raw.description || '', media_type_id: raw.media_type_id, contributors, genre_ids: (raw.genres || []).map(x => x.id), tag_ids: [...new Set(tagIDs)] }) });
         await setShelf(book, data.shelf);
       } else {
-        const mediaTypes = await api('/media-types');
-        const mediaType = mediaTypes.find(t => /^(book|books)$/i.test(t.name));
-        if (!mediaType) throw new Error('No Book media type is configured in Librarium.');
-        const created = await api(`/libraries/${data.libraryId}/books`, { method: 'POST', body: JSON.stringify({ title: data.title.trim(), media_type_id: mediaType.id, contributors: [{ name: data.author.trim(), role: 'author' }] }) });
-        const lib = state.libraries.find(l => l.id === data.libraryId); await setShelf(normaliseBook(created, lib), data.shelf);
+        const lib = state.libraries.find(l => l.id === data.libraryId);
+        if(!lib)throw Error('Choose a library.');
+        if(data.shelf && !(state.shelves.get(lib.id)||[]).some(s=>s.name.toUpperCase()===data.shelf.toUpperCase()))
+          throw Error(`Shelf ${data.shelf} does not exist in ${lib.name}. Choose another shelf or leave the book unshelved.`);
+        const created = await api(`/libraries/${encodeURIComponent(lib.id)}/books`, {
+          method:'POST',body:JSON.stringify({title:data.title.trim(),media_type_id:data.mediaTypeId,
+            contributors:[{name:data.author.trim(),role:'author'}]}),
+        });
+        createdBook=true;
+        await setShelf(normaliseBook(created,lib),data.shelf);
+        owner=lib.name;
       }
       modal.close(); await loadLive(); toast('Saved to the live Librarium database');
-    } catch (error) { toast(error.message); }
+    } catch (error) {
+      if(createdBook){
+        status.textContent='The book was created, but the shelf or catalogue could not be updated. Close this form and refresh before trying again.';
+        toast(status.textContent);
+      }else status.textContent=error.message;
+    } finally {
+      form.dataset.saving=String(createdBook);
+      if(!createdBook)submit.disabled=false;
+    }
+
   };
 
   window.confirmDelete = function (id, lib = '') { const b = books.find(x => x.id === id && (!lib || x.libraryId === lib)); show(`<h2>Remove from ${esc(b.owner)}?</h2><p style="margin-top:15px">This retires that library’s copy of “${esc(b.title)}”.</p><div class="actions"><button onclick="openBook('${id}','','${b.libraryId}')">Cancel</button><button class="danger" onclick="deleteBook('${id}','${b.libraryId}')">Remove copy</button></div>`); };
